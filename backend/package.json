@@ -1,0 +1,10 @@
+{
+  "name": "dorm-repair-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "宿舍报修管理系统后端",
+  "engines": { "node": ">=24.4.0" },
+  "scripts": { "start": "node src/server.js", "dev": "node --watch src/server.js", "test": "node --test" },
+  "dependencies": { "cors": "^2.8.5", "express": "^5.1.0" }
+}
