@@ -1,10 +1,10 @@
 const API_URL = 'http://localhost:3000/api/repairs'
 
-async function request(options = {}) {
+async function request(options = {}, url = API_URL) {
   let response
   try {
     // 超时或无法连接时给出中文提示，不让网络错误中断页面。
-    response = await fetch(API_URL, { ...options, signal: AbortSignal.timeout(10000) })
+    response = await fetch(url, { ...options, signal: AbortSignal.timeout(10000) })
   } catch {
     throw new Error('无法连接后端或请求超时，请确认后端已在 http://localhost:3000 启动。')
   }
@@ -33,6 +33,15 @@ export async function getRepairs() {
   const orders = await request()
   if (!Array.isArray(orders)) throw new Error('后端工单列表格式不正确，请稍后重试。')
   return orders.map(toPageRecord)
+}
+
+export async function updateRepairStatus(databaseId, status) {
+  // URL 使用数据库主键，不使用界面显示的报修编号。
+  const order = await request({
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  }, `${API_URL}/${encodeURIComponent(databaseId)}/status`)
+  return toPageRecord(order)
 }
 
 export async function createRepair(form) {

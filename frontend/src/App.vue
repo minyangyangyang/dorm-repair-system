@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { createRepair, getRepairs } from './api/repairs.js'
+import { createRepair, getRepairs, updateRepairStatus } from './api/repairs.js'
 
 const page = ref('home')
 const role = ref('student')
@@ -16,8 +16,10 @@ const loading = ref(false)
 const loadError = ref('')
 const submitting = ref(false)
 const submitError = ref('')
+const updatingId = ref(null)
+const statusError = ref('')
 async function loadRepairs() {
-  if (loading.value) return
+  if (loading.value || updatingId.value !== null) return
   loading.value = true
   loadError.value = ''
   try {
@@ -44,15 +46,25 @@ function switchRole() {
   statusFilter.value = ''
   categoryFilter.value = ''
 }
-function advanceStatus(id, expectedStatus) {
-  if (role.value !== 'worker') return
+async function advanceStatus(id, expectedStatus) {
+  if (role.value !== 'worker' || updatingId.value !== null || loading.value) return
   const record = records.value.find(item => item.id === id)
   // 校验操作时的状态，避免旧按钮或重复操作推动状态。
   if (!record || record.status !== expectedStatus) return
   const transition = transitions[record.status]
   if (!transition) return
-  record.status = transition.next
-  message.value = `工单 ${record.id} ${transition.label}成功，当前状态：${record.status}（仅当前页面演示，尚未保存到数据库）。`
+  updatingId.value = record.databaseId
+  statusError.value = ''
+  message.value = ''
+  try {
+    // 等后端确认保存成功后才替换工单，失败时保持原状态。
+    const updated = await updateRepairStatus(record.databaseId, transition.next)
+    const index = records.value.findIndex(item => item.databaseId === updated.databaseId)
+    if (index !== -1) records.value[index] = updated
+    message.value = `工单 ${updated.id} ${transition.label}成功，当前状态：${updated.status}。`
+  } catch (error) {
+    statusError.value = `状态更新失败：${error.message}。如工单已由其他页面更新，请重新读取。`
+  } finally { updatingId.value = null }
 }
 const completed = computed(() => records.value.filter(item => item.status === '已完成').length)
 const labels = { building: '宿舍楼', room: '房间号', category: '故障类别', description: '问题描述', contact: '联系人', phone: '联系电话' }
@@ -93,8 +105,9 @@ async function submit() {
     <div class="identity role-switch"><label for="role">当前身份</label><select id="role" v-model="role" @change="switchRole"><option value="student">学生</option><option value="worker">维修人员</option></select><small>演示切换</small></div>
   </div></header>
   <main>
+    <div v-if="statusError" class="request-error" role="alert"><span>{{ statusError }}</span><button class="secondary" :disabled="loading || submitting || updatingId !== null" @click="loadRepairs(); statusError = ''">重新读取</button></div>
     <p v-if="loading" class="loading-message" role="status">正在读取工单，请稍候……</p>
-    <div v-if="loadError" class="request-error" role="alert"><span>{{ loadError }}</span><button class="secondary" :disabled="loading || submitting" @click="loadRepairs">重新读取</button></div>
+    <div v-if="loadError" class="request-error" role="alert"><span>{{ loadError }}</span><button class="secondary" :disabled="loading || submitting || updatingId !== null" @click="loadRepairs">重新读取</button></div>
     <template v-if="role === 'worker'">
       <template v-if="page === 'home'">
         <section class="welcome"><span class="eyebrow">维修人员服务</span><h1>及时响应，让宿舍生活更安心。</h1><p>维修师傅，你好！欢迎进入维修人员端。<br>查看宿舍工单，按步骤更新维修进度。</p><button class="primary" @click="navigate('orders')">查看维修工单 →</button><span class="decoration" aria-hidden="true">⌂</span></section>
@@ -112,7 +125,7 @@ async function submit() {
             <div class="record-top"><div><span class="category">{{ record.category }}</span><span class="record-id">{{ record.id }}</span></div><span class="status" :class="statusStyles[record.status]">{{ record.status }}</span></div>
             <p class="description">{{ record.description }}</p>
             <div class="record-meta"><span>宿舍：{{ record.building }} · {{ record.room }}</span><span>联系人：{{ record.contact }}</span><span>联系电话：{{ record.phone }}</span><span>提交时间：{{ record.time }}</span></div>
-            <div class="order-actions"><button v-if="transitions[record.status]" class="primary" :aria-label="`${transitions[record.status].label}，工单${record.id}`" @click="advanceStatus(record.id, record.status)">{{ transitions[record.status].label }}</button><span v-else class="closed-note">维修已完成，无需继续操作</span></div>
+            <div class="order-actions"><button v-if="transitions[record.status]" class="primary" :disabled="updatingId !== null || loading" :aria-busy="updatingId === record.databaseId" :aria-label="`${transitions[record.status].label}，工单${record.id}`" @click="advanceStatus(record.id, record.status)">{{ updatingId === record.databaseId ? '正在更新……' : transitions[record.status].label }}</button><span v-else class="closed-note">维修已完成，无需继续操作</span></div>
           </article>
           <p v-if="!loading && !loadError && !filteredRecords.length" class="empty">暂无符合筛选条件的工单，请调整或重置筛选。</p>
         </section>
@@ -145,6 +158,6 @@ async function submit() {
       <p v-if="message" class="success" role="status">{{ message }}</p>
       <section class="panel"><div class="section-heading"><h2>全部记录 <span class="badge">{{ records.length }}</span></h2><span>新提交的记录在前</span></div><article v-for="record in records" :key="record.id" class="record"><div class="record-top"><div><span class="category">{{ record.category }}</span><span class="record-id">{{ record.id }}</span></div><span class="status" :class="statusStyles[record.status]">{{ record.status }}</span></div><p class="description">{{ record.description }}</p><div class="record-meta"><span>宿舍：{{ record.building }} · {{ record.room }}</span><span>提交时间：{{ record.time }}</span></div></article><p v-if="!loading && !loadError && !records.length" class="empty">暂无报修记录，点击“提交报修”创建第一条申请。</p></section>
     </template>
-    <p class="demo-note">课程设计 · {{ role === 'student' ? '学生端' : '维修人员端' }}演示｜工单读取和提交已连接数据库；身份切换仅用于演示，维修状态操作暂不保存，刷新后以数据库状态为准。</p>
+    <p class="demo-note">课程设计 · {{ role === 'student' ? '学生端' : '维修人员端' }}演示｜工单读取和提交已连接数据库；身份切换仅用于演示，维修状态已保存到数据库，刷新后仍会保留。</p>
   </main><footer>宿舍报修管理系统 · 让校园生活更安心</footer>
 </template>

@@ -4,6 +4,9 @@ import { randomUUID } from 'node:crypto'
 
 const fields = { building: '宿舍楼', room: '房间号', category: '故障类别', description: '问题描述', contact_name: '联系人', contact_phone: '联系电话' }
 const categories = ['水电', '家具', '网络', '门窗', '其他']
+// 后端最终决定状态规则；已完成没有下一步，不允许跳级、回退或重复设置。
+const nextStatus = new Map([['待处理', '已接单'], ['已接单', '维修中'], ['维修中', '已完成']])
+const statuses = ['待处理', '已接单', '维修中', '已完成']
 
 export function createApp(db) {
   const app = express()
@@ -48,6 +51,30 @@ export function createApp(db) {
       .run(orderNo, order.building, order.room, order.category, order.description, order.contact_name, order.contact_phone, now, now)
     const created = db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(result.lastInsertRowid)
     res.status(201).json({ success: true, message: '报修工单创建成功', data: created })
+  })
+
+  app.patch('/api/repairs/:id/status', (req, res) => {
+    const id = Number(req.params.id)
+    if (!/^\d+$/.test(req.params.id) || !Number.isSafeInteger(id) || id < 1) {
+      return res.status(400).json({ success: false, message: '工单 id 必须是正整数数据库主键' })
+    }
+    const order = db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(id)
+    if (!order) return res.status(404).json({ success: false, message: '工单不存在' })
+    if (!req.is('application/json')) return res.status(415).json({ success: false, message: '请使用 application/json 格式提交' })
+    const status = req.body?.status
+    if (Array.isArray(req.body) || !statuses.includes(status)) {
+      return res.status(400).json({ success: false, message: '状态必须为待处理、已接单、维修中或已完成' })
+    }
+    if (nextStatus.get(order.status) !== status) {
+      return res.status(409).json({ success: false, message: `不能从“${order.status}”变为“${status}”：状态不可跳级、回退或重复设置，已完成工单不可再操作` })
+    }
+    // 将旧状态放入 UPDATE 条件，防止同时操作时覆盖其他请求的修改。
+    const updatedAt = new Date(Math.max(Date.now(), Date.parse(order.updated_at) + 1)).toISOString()
+    const result = db.prepare('UPDATE repair_orders SET status = ?, updated_at = ? WHERE id = ? AND status = ?')
+      .run(status, updatedAt, id, order.status)
+    if (result.changes !== 1) return res.status(409).json({ success: false, message: '工单状态已变化，请重新读取后再操作' })
+    const updated = db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(id)
+    res.json({ success: true, message: `工单状态已更新为“${status}”`, data: updated })
   })
 
   app.use((req, res) => res.status(404).json({ success: false, message: '接口不存在' }))

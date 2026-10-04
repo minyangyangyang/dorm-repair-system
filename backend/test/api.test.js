@@ -81,16 +81,50 @@ test('真实服务器：校验、SQLite 写入、查询、重启持久化及数�
     assert.equal(beforeCreate.data.length, initial.data.length, '非法请求不能写入数据')
     const response = await post(payload)
     assert.equal(response.status, 201)
-    const created = (await response.json()).data
+    let created = (await response.json()).data
     assert.equal(created.status, '待处理')
     assert.match(created.order_no, /^BX\d{8}-[\da-f-]{36}$/)
     assert.equal(created.created_at, created.updated_at)
     const listed = await (await fetch(`${baseUrl}/api/repairs`)).json()
     assert.deepEqual(listed.data[0], created)
+    const patch = (id, status) => fetch(`${baseUrl}/api/repairs/${id}/status`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+    })
+    // 遍历每一阶段的所有目标状态：除唯一下一步外，一律拒绝。
+    const stages = ['待处理', '已接单', '维修中', '已完成']
+    for (let index = 0; index < stages.length; index++) {
+      for (const target of stages.filter(status => status !== stages[index + 1])) {
+        const rejected = await patch(created.id, target)
+        assert.equal(rejected.status, 409, `${created.status} → ${target} 应拒绝`)
+        assert.equal((await rejected.json()).success, false)
+      }
+      const invalidStatus = await patch(created.id, '未知状态')
+      assert.equal(invalidStatus.status, 400)
+      const unchanged = (await (await fetch(`${baseUrl}/api/repairs`)).json()).data.find(item => item.id === created.id)
+      assert.deepEqual(unchanged, created, '非法操作不得更改状态或更新时间')
+      if (index < stages.length - 1) {
+        const success = await patch(created.id, stages[index + 1])
+        assert.equal(success.status, 200)
+        const updated = (await success.json()).data
+        assert.equal(updated.status, stages[index + 1])
+        assert.ok(Date.parse(updated.updated_at) > Date.parse(created.updated_at))
+        assert.deepEqual({ ...updated, status: created.status, updated_at: created.updated_at }, created)
+        created = updated
+      }
+    }
+    const missing = await patch(9007199254740991, '已接单')
+    assert.equal(missing.status, 404)
+    const invalidId = await patch('abc', '已接单')
+    assert.equal(invalidId.status, 400)
+    // 两个同时发出的相同操作只有一个成功，另一个不能重复推进。
+    const concurrentOrder = (await (await post(payload)).json()).data
+    const concurrent = await Promise.all([patch(concurrentOrder.id, '已接单'), patch(concurrentOrder.id, '已接单')])
+    assert.deepEqual(concurrent.map(item => item.status).sort(), [200, 409])
     await stopServer(server)
     server = await startServer()
     const afterRestart = await (await fetch(`${baseUrl}/api/repairs`)).json()
     assert.deepEqual(afterRestart.data.find(order => order.id === created.id), created)
+    assert.equal(created.status, '已完成', '重启后必须仍为已完成')
     await stopServer(server)
     server = null
     const db = openDatabase()
