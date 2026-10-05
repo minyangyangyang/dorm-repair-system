@@ -1,6 +1,13 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { createRepair, getRepairs, updateRepairStatus } from './api/repairs.js'
+import EvaluationPanel from './components/EvaluationPanel.vue'
+
+const evaluations = reactive({})
+function evaluationState(id) {
+  // 已完成工单按数据库主键缓存评价；重新读取工单列表时清空，避免显示过期结果。
+  return evaluations[id] ||= { loaded: false, loading: false, error: '', data: null }
+}
 
 const page = ref('home')
 const role = ref('student')
@@ -24,6 +31,7 @@ async function loadRepairs() {
   loadError.value = ''
   try {
     records.value = await getRepairs()
+    for (const id of Object.keys(evaluations)) delete evaluations[id]
   } catch (error) { loadError.value = `读取工单失败：${error.message}` }
   finally { loading.value = false }
 }
@@ -156,7 +164,7 @@ async function submit() {
     <template v-else>
       <div class="page-heading heading-action"><div><span class="eyebrow">MY REQUESTS · 申请记录</span><h1>我的报修</h1><p>查看你的报修申请及当前处理状态。</p></div><button class="primary" @click="navigate('submit')">＋ 提交报修</button></div>
       <p v-if="message" class="success" role="status">{{ message }}</p>
-      <section class="panel"><div class="section-heading"><h2>全部记录 <span class="badge">{{ records.length }}</span></h2><span>新提交的记录在前</span></div><article v-for="record in records" :key="record.id" class="record"><div class="record-top"><div><span class="category">{{ record.category }}</span><span class="record-id">{{ record.id }}</span></div><span class="status" :class="statusStyles[record.status]">{{ record.status }}</span></div><p class="description">{{ record.description }}</p><div class="record-meta"><span>宿舍：{{ record.building }} · {{ record.room }}</span><span>提交时间：{{ record.time }}</span></div></article><p v-if="!loading && !loadError && !records.length" class="empty">暂无报修记录，点击“提交报修”创建第一条申请。</p></section>
+      <section class="panel"><div class="section-heading"><h2>全部记录 <span class="badge">{{ records.length }}</span></h2><span>新提交的记录在前</span></div><article v-for="record in records" :key="record.id" class="record"><div class="record-top"><div><span class="category">{{ record.category }}</span><span class="record-id">{{ record.id }}</span></div><span class="status" :class="statusStyles[record.status]">{{ record.status }}</span></div><p class="description">{{ record.description }}</p><div class="record-meta"><span>宿舍：{{ record.building }} · {{ record.room }}</span><span>提交时间：{{ record.time }}</span></div><EvaluationPanel v-if="record.status === '已完成'" :key="record.databaseId" :order-id="record.databaseId" :state="evaluationState(record.databaseId)" /></article><p v-if="!loading && !loadError && !records.length" class="empty">暂无报修记录，点击“提交报修”创建第一条申请。</p></section>
     </template>
     <p class="demo-note">课程设计 · {{ role === 'student' ? '学生端' : '维修人员端' }}演示｜工单读取和提交已连接数据库；身份切换仅用于演示，维修状态已保存到数据库，刷新后仍会保留。</p>
   </main><footer>宿舍报修管理系统 · 让校园生活更安心</footer>

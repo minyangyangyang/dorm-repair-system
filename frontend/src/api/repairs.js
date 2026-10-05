@@ -1,5 +1,17 @@
 const API_URL = 'http://localhost:3000/api/repairs'
 
+export function getEvaluation(databaseId) {
+  return request({}, `${API_URL}/${encodeURIComponent(databaseId)}/evaluation`)
+}
+
+export function submitEvaluation(databaseId, rating, comment) {
+  // 使用数据库主键提交评价，评分和内容由后端再次校验并保存。
+  return request({
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rating, comment }),
+  }, `${API_URL}/${encodeURIComponent(databaseId)}/evaluation`)
+}
+
 async function request(options = {}, url = API_URL) {
   let response
   try {
