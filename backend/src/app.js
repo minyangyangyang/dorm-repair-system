@@ -77,6 +77,54 @@ export function createApp(db) {
     res.json({ success: true, message: `工单状态已更新为“${status}”`, data: updated })
   })
 
+  // 两个评价接口共用主键校验和工单存在性检查。
+  function findEvaluationOrder(req, res, next) {
+    const id = Number(req.params.id)
+    if (!/^\d+$/.test(req.params.id) || !Number.isSafeInteger(id) || id < 1) {
+      return res.status(400).json({ success: false, message: '工单 id 必须是正整数数据库主键' })
+    }
+    const order = db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(id)
+    if (!order) return res.status(404).json({ success: false, message: '工单不存在' })
+    req.repairOrder = order
+    next()
+  }
+
+  app.get('/api/repairs/:id/evaluation', findEvaluationOrder, (req, res) => {
+    const evaluation = db.prepare('SELECT * FROM evaluations WHERE repair_order_id = ?').get(req.repairOrder.id)
+    res.json({ success: true, message: evaluation ? '评价查询成功' : '该工单尚未评价', data: evaluation || null })
+  })
+
+  app.post('/api/repairs/:id/evaluation', findEvaluationOrder, (req, res) => {
+    if (!req.is('application/json')) return res.status(415).json({ success: false, message: '请使用 application/json 格式提交' })
+    const body = req.body
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return res.status(400).json({ success: false, message: '请求内容必须是 JSON 对象' })
+    if (!Number.isInteger(body.rating) || body.rating < 1 || body.rating > 5) {
+      return res.status(400).json({ success: false, message: '评分必须为 1～5 的整数' })
+    }
+    // 评价文字可不填，传入时必须是文本；限制原始长度，避免大量空格绕过校验。
+    const comment = body.comment === undefined ? '' : body.comment
+    if (typeof comment !== 'string' || comment.length > 500) {
+      return res.status(400).json({ success: false, message: '评价内容必须是文本，且不超过 500 字' })
+    }
+    const order = req.repairOrder
+    if (order.status !== '已完成') return res.status(409).json({ success: false, message: '只有已完成的工单才能评价' })
+    if (db.prepare('SELECT id FROM evaluations WHERE repair_order_id = ?').get(order.id)) {
+      return res.status(409).json({ success: false, message: '该工单已经评价，不能重复提交' })
+    }
+    try {
+      const result = db.prepare('INSERT INTO evaluations (repair_order_id, rating, comment, created_at) VALUES (?, ?, ?, ?)')
+        .run(order.id, body.rating, comment.trim(), new Date().toISOString())
+      const evaluation = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(result.lastInsertRowid)
+      res.status(201).json({ success: true, message: '维修评价提交成功', data: evaluation })
+    } catch (error) {
+      // UNIQUE 是最终防线：其他请求抢先提交时仍然不产生第二条评价。
+      if (db.prepare('SELECT id FROM evaluations WHERE repair_order_id = ?').get(order.id)) {
+        return res.status(409).json({ success: false, message: '该工单已经评价，不能重复提交' })
+      }
+      throw error
+    }
+  })
+
   app.use((req, res) => res.status(404).json({ success: false, message: '接口不存在' }))
   app.use((error, req, res, next) => {
     if (error.type === 'entity.parse.failed') return res.status(400).json({ success: false, message: 'JSON 格式错误，请检查请求内容' })

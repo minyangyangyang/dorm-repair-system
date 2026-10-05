@@ -10,6 +10,7 @@ export function openDatabase(path = databasePath) {
   const db = new DatabaseSync(path)
   db.exec(`
     PRAGMA busy_timeout = 5000;
+    PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS repair_orders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       order_no TEXT NOT NULL UNIQUE,
@@ -22,6 +23,14 @@ export function openDatabase(path = databasePath) {
       status TEXT NOT NULL DEFAULT '待处理' CHECK(status IN ('待处理', '已接单', '维修中', '已完成')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+    -- 只新增评价表，不重建或清空已有工单表。
+    CREATE TABLE IF NOT EXISTS evaluations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      repair_order_id INTEGER NOT NULL UNIQUE REFERENCES repair_orders(id),
+      rating INTEGER NOT NULL CHECK(typeof(rating) = 'integer' AND rating BETWEEN 1 AND 5),
+      comment TEXT NOT NULL DEFAULT '' CHECK(typeof(comment) = 'text' AND length(comment) <= 500),
+      created_at TEXT NOT NULL
     );
   `)
   return db

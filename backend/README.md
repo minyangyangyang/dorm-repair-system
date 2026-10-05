@@ -1,5 +1,72 @@
 # 宿舍报修管理系统后端
 
+## 维修评价（阶段 4A）
+
+本阶段仅新增后端数据库与 API，frontend 不作修改。更新代码后请重启后端以加载新路由，或使用 `npm.cmd run dev` 自动重启。
+
+启动时自动创建 `evaluations`，不重建、不清空 `repair_orders`。每个数据库连接启用 `PRAGMA foreign_keys = ON`。
+
+| 字段 | 类型及约束 |
+| --- | --- |
+| id | INTEGER PRIMARY KEY AUTOINCREMENT |
+| repair_order_id | INTEGER NOT NULL UNIQUE，外键关联 repair_orders.id |
+| rating | INTEGER NOT NULL，CHECK 保证存储类型为整数且在 1～5 之间 |
+| comment | TEXT NOT NULL DEFAULT ''，CHECK 保证文本且最多 500 字 |
+| created_at | TEXT NOT NULL，服务端生成的 UTC ISO 时间 |
+
+### POST /api/repairs/:id/evaluation
+
+`:id` 是数据库整数主键。Postman 选择 POST，地址例如 `http://localhost:3000/api/repairs/1/evaluation`，Body 选择 raw / JSON：
+
+```json
+{ "rating": 5, "comment": "维修很及时，问题已经解决。" }
+```
+
+成功返回 201：
+
+```json
+{
+  "success": true,
+  "message": "维修评价提交成功",
+  "data": {
+    "id": 1,
+    "repair_order_id": 1,
+    "rating": 5,
+    "comment": "维修很及时，问题已经解决。",
+    "created_at": "2026-10-04T13:00:00.000Z"
+  }
+}
+```
+
+业务规则由后端强制执行：工单真实存在且状态必须为“已完成”，每张工单只能评价一次。rating 必须是 JSON 数字且为 1～5 的整数，字符串 `"5"` 也不接受。comment 可省略或为空字符串，填写时必须是文本且原始长度不超过 500 字，保存时去掉首尾空白；null、对象、数组等拒绝。
+
+常见错误均返回 `{ "success": false, "message": "中文错误信息" }`：
+
+- 400：id 非法、评分非法、评价文字类型或长度非法、请求 JSON 格式错误。
+- 404：工单不存在。
+- 409：工单未完成，或已评价、重复提交。
+- 415：请求不是 application/json。
+
+数据库 UNIQUE 防止并发请求产生重复评价，FOREIGN KEY 防止关联不存在的工单，CHECK 保证评分范围。只有已完成可评价的业务检查位于 `src/app.js`；所有工单状态接口也不允许从已完成回退。
+
+### GET /api/repairs/:id/evaluation
+
+已评价返回 200，结构为 `{ "success": true, "message": "评价查询成功", "data": { ...评价字段 } }`。
+
+工单存在但尚未评价返回 200：
+
+```json
+{ "success": true, "message": "该工单尚未评价", "data": null }
+```
+
+不存在的工单返回 404，非法 id 返回 400。现有 GET /api/repairs 保持返回格式不变，下一阶段使用此独立接口显示评价，避免改变现有列表和客户端数据适配。
+
+### 评价人工测试和自动测试
+
+先通过 POST /api/repairs 创建工单，记录 `data.id`。未完成时 POST 评价应返回 409。通过状态接口依次推进至已完成，再提交 5 分中文评价应返回 201；GET 应返回同一评价。再次 POST 应返回 409。将 rating 改为 0、6、3.5、"abc" 或 null 应返回 400；使用不存在的主键查询或提交应返回 404。重启后端后 GET，评价应仍然存在。
+
+`npm.cmd test` 同时运行原有 GET、POST、PATCH 测试和评价测试，覆盖所有未完成状态、非法评分、异常文字、并发重复评价、数据库约束、重启和重新连接后的持久化，并确认原有工单不变。每次运行会保留两条测试工单及对应评价；测试使用 3107 端口。
+
 提供工单查询、创建和状态更新接口，前端已接入这些接口。使用 Express、CORS 和 Node.js 内置 SQLite，要求 Node.js 24.4 或更新版本（当前开发环境为 24.4.1）。内置 SQLite 在此版本可能显示 ExperimentalWarning，不影响本项目的正常启动。
 
 ## 启动

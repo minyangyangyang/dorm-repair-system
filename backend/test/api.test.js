@@ -90,9 +90,22 @@ test('真实服务器：校验、SQLite 写入、查询、重启持久化及数�
     const patch = (id, status) => fetch(`${baseUrl}/api/repairs/${id}/status`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
     })
+    const evaluate = (id, body = { rating: 5, comment: '维修很及时，问题已经解决。' }) => fetch(`${baseUrl}/api/repairs/${id}/evaluation`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    })
+    const getEvaluation = id => fetch(`${baseUrl}/api/repairs/${id}/evaluation`)
+    const emptyEvaluation = await getEvaluation(created.id)
+    assert.equal(emptyEvaluation.status, 200)
+    assert.equal((await emptyEvaluation.json()).data, null)
     // 遍历每一阶段的所有目标状态：除唯一下一步外，一律拒绝。
     const stages = ['待处理', '已接单', '维修中', '已完成']
     for (let index = 0; index < stages.length; index++) {
+      if (index < 3) {
+        const unfinished = await evaluate(created.id)
+        assert.equal(unfinished.status, 409, `${stages[index]}工单不可评价`)
+        assert.equal((await getEvaluation(created.id)).status, 200)
+        assert.equal((await (await getEvaluation(created.id)).json()).data, null)
+      }
       for (const target of stages.filter(status => status !== stages[index + 1])) {
         const rejected = await patch(created.id, target)
         assert.equal(rejected.status, 409, `${created.status} → ${target} 应拒绝`)
@@ -120,15 +133,53 @@ test('真实服务器：校验、SQLite 写入、查询、重启持久化及数�
     const concurrentOrder = (await (await post(payload)).json()).data
     const concurrent = await Promise.all([patch(concurrentOrder.id, '已接单'), patch(concurrentOrder.id, '已接单')])
     assert.deepEqual(concurrent.map(item => item.status).sort(), [200, 409])
+    for (const rating of [0, 6, -1, 3.5, 'abc', '5', null, undefined]) {
+      const invalid = await evaluate(created.id, { rating })
+      assert.equal(invalid.status, 400)
+      assert.equal((await invalid.json()).message, '评分必须为 1～5 的整数')
+    }
+    for (const comment of [null, 123, {}, [], '字'.repeat(501)]) {
+      assert.equal((await evaluate(created.id, { rating: 5, comment })).status, 400)
+    }
+    for (const body of [null, [], 'text']) assert.equal((await evaluate(created.id, body)).status, 400)
+    assert.equal((await evaluate('abc')).status, 400)
+    assert.equal((await getEvaluation('abc')).status, 400)
+    assert.equal((await evaluate(9007199254740991)).status, 404)
+    assert.equal((await getEvaluation(9007199254740991)).status, 404)
+    const submittedEvaluation = await evaluate(created.id)
+    assert.equal(submittedEvaluation.status, 201)
+    const evaluation = (await submittedEvaluation.json()).data
+    assert.equal(evaluation.repair_order_id, created.id)
+    assert.equal(evaluation.rating, 5)
+    assert.equal(evaluation.comment, '维修很及时，问题已经解决。')
+    assert.ok(evaluation.created_at)
+    assert.deepEqual((await (await getEvaluation(created.id)).json()).data, evaluation)
+    assert.equal((await evaluate(created.id)).status, 409)
+    // 无文字和边界评分也合法，重复并发提交只能成功一次。
+    await patch(concurrentOrder.id, '维修中')
+    await patch(concurrentOrder.id, '已完成')
+    const parallelEvaluations = await Promise.all([evaluate(concurrentOrder.id, { rating: 1 }), evaluate(concurrentOrder.id, { rating: 1 })])
+    assert.deepEqual(parallelEvaluations.map(item => item.status).sort(), [201, 409])
+    assert.equal((await (await getEvaluation(concurrentOrder.id)).json()).data.comment, '')
     await stopServer(server)
     server = await startServer()
     const afterRestart = await (await fetch(`${baseUrl}/api/repairs`)).json()
     assert.deepEqual(afterRestart.data.find(order => order.id === created.id), created)
     assert.equal(created.status, '已完成', '重启后必须仍为已完成')
+    assert.deepEqual((await (await getEvaluation(created.id)).json()).data, evaluation, '重启后评价仍保留')
     await stopServer(server)
     server = null
     const db = openDatabase()
     try {
+      assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1)
+      assert.deepEqual({ ...db.prepare('SELECT * FROM evaluations WHERE repair_order_id = ?').get(created.id) }, evaluation)
+      assert.equal(db.prepare('SELECT count(*) AS total FROM evaluations WHERE repair_order_id = ?').get(created.id).total, 1)
+      assert.throws(() => db.prepare('INSERT INTO evaluations (repair_order_id, rating, created_at) VALUES (?, 5, ?)').run(created.id, evaluation.created_at), /UNIQUE/)
+      assert.throws(() => db.prepare('INSERT INTO evaluations (repair_order_id, rating, created_at) VALUES (?, 5, ?)').run(9007199254740991, evaluation.created_at), /FOREIGN KEY/)
+      assert.throws(() => db.prepare('UPDATE evaluations SET rating = 3.5 WHERE id = ?').run(evaluation.id), /CHECK/)
+      assert.throws(() => db.prepare('UPDATE evaluations SET rating = 6 WHERE id = ?').run(evaluation.id), /CHECK/)
+      assert.throws(() => db.prepare('UPDATE evaluations SET comment = ? WHERE id = ?').run('字'.repeat(501), evaluation.id), /CHECK/)
+      for (const previous of initial.data) assert.deepEqual({ ...db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(previous.id) }, previous, '已有工单不能被改变')
       assert.equal(db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(created.id).order_no, created.order_no)
       assert.throws(() => db.prepare('UPDATE repair_orders SET status = ? WHERE id = ?').run('非法状态', created.id), /CHECK/)
       assert.throws(() => db.prepare('INSERT INTO repair_orders SELECT * FROM repair_orders WHERE id = ?').run(created.id), /UNIQUE/)
