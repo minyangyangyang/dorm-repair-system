@@ -38,6 +38,7 @@ export function toPageRecord(order) {
   const pad = value => String(value).padStart(2, '0')
   return {
     id: order.order_no, databaseId: order.id,
+    createdAt: order.created_at, updatedAt: order.updated_at,
     building: order.building, room: order.room, category: order.category,
     description: order.description, contact: order.contact_name,
     phone: order.contact_phone, status: order.status,

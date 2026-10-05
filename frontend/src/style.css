@@ -1,5 +1,18 @@
 ﻿:root { font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; color: #243431; background: #f5f7f7; font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
 * { box-sizing: border-box; }
+.repair-details { margin-top: 16px; }
+.details-card { margin-top: 14px; padding: 22px; background: #f8faf9; border: 1px solid #dfe9e3; border-radius: 10px; }
+.details-card .section-heading { flex-wrap: wrap; }
+.details-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 28px; margin: 22px 0 0; }
+.details-fields > div { min-width: 0; }
+.details-fields dt { color: #71867a; font-size: 12px; margin-bottom: 8px; }
+.details-fields dd { margin: 0; font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
+.details-wide { grid-column: 1 / -1; }
+.details-description { white-space: pre-wrap; }
+.details-evaluation { margin-top: 24px; padding-top: 20px; border-top: 1px solid #dfe9e3; }
+.details-evaluation h3 { font-size: 15px; margin-bottom: 12px; }
+.details-evaluation .evaluation-hint { margin-top: 12px; line-height: 1.8; }
+@media (max-width: 540px) { .details-fields { grid-template-columns: 1fr; } .details-card { padding: 18px 14px; } }
 .statistics-cards { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; margin-bottom: 24px; }
 .statistics-card { padding: 22px 18px; }
 .statistics-card > span { color: #71867a; font-size: 13px; }
