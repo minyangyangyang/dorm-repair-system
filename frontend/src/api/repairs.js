@@ -1,5 +1,9 @@
 const API_URL = 'http://localhost:3000/api/repairs'
 
+export function getStatistics() {
+  return request({}, 'http://localhost:3000/api/statistics')
+}
+
 export function getEvaluation(databaseId) {
   return request({}, `${API_URL}/${encodeURIComponent(databaseId)}/evaluation`)
 }

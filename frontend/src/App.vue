@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { createRepair, getRepairs, updateRepairStatus } from './api/repairs.js'
 import EvaluationPanel from './components/EvaluationPanel.vue'
+import StatisticsPage from './components/StatisticsPage.vue'
 
 const evaluations = reactive({})
 function evaluationState(id) {
@@ -12,8 +13,8 @@ function evaluationState(id) {
 const page = ref('home')
 const role = ref('student')
 const navigation = computed(() => role.value === 'student'
-  ? { home: '首页', submit: '提交报修', records: '我的报修' }
-  : { home: '首页', orders: '维修工单' })
+  ? { home: '首页', submit: '提交报修', records: '我的报修', statistics: '数据统计' }
+  : { home: '首页', orders: '维修工单', statistics: '数据统计' })
 const statuses = ['待处理', '已接单', '维修中', '已完成']
 const statusFilter = ref('')
 const categoryFilter = ref('')
@@ -116,7 +117,8 @@ async function submit() {
     <div v-if="statusError" class="request-error" role="alert"><span>{{ statusError }}</span><button class="secondary" :disabled="loading || submitting || updatingId !== null" @click="loadRepairs(); statusError = ''">重新读取</button></div>
     <p v-if="loading" class="loading-message" role="status">正在读取工单，请稍候……</p>
     <div v-if="loadError" class="request-error" role="alert"><span>{{ loadError }}</span><button class="secondary" :disabled="loading || submitting || updatingId !== null" @click="loadRepairs">重新读取</button></div>
-    <template v-if="role === 'worker'">
+    <StatisticsPage v-if="page === 'statistics'" />
+    <template v-else-if="role === 'worker'">
       <template v-if="page === 'home'">
         <section class="welcome"><span class="eyebrow">维修人员服务</span><h1>及时响应，让宿舍生活更安心。</h1><p>维修师傅，你好！欢迎进入维修人员端。<br>查看宿舍工单，按步骤更新维修进度。</p><button class="primary" @click="navigate('orders')">查看维修工单 →</button><span class="decoration" aria-hidden="true">⌂</span></section>
         <section class="stats worker-stats" aria-label="工单状态概况"><div v-for="status in statuses" :key="status"><span>{{ status }}工单</span><strong>{{ statusCounts[status] }}<small> 条</small></strong></div></section>
