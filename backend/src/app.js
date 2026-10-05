@@ -23,6 +23,28 @@ export function createApp(db) {
     res.json({ success: true, data: orders })
   })
 
+  app.get('/api/statistics', (req, res) => {
+    // 同一只读事务保证三次查询看到相同数据，不受其他连接写入影响。
+    db.exec('BEGIN')
+    try {
+      const total = db.prepare('SELECT COUNT(*) AS count FROM repair_orders').get().count
+      const statusRows = db.prepare('SELECT status, COUNT(*) AS count FROM repair_orders GROUP BY status').all()
+      const categoryRows = db.prepare('SELECT category, COUNT(*) AS count FROM repair_orders GROUP BY category').all()
+      db.exec('COMMIT')
+      // 只初始化合法字段的零值，实际数量全部来自 SQL 查询。
+      const statusDistribution = Object.fromEntries(statuses.map(status => [status, 0]))
+      const categoryDistribution = Object.fromEntries(categories.map(category => [category, 0]))
+      for (const row of statusRows) statusDistribution[row.status] = row.count
+      for (const row of categoryRows) categoryDistribution[row.category] = row.count
+      const completed = statusDistribution['已完成']
+      const completionRate = total === 0 ? 0 : Number((completed / total * 100).toFixed(2))
+      res.json({ success: true, data: { total, statusDistribution, categoryDistribution, completed, completionRate } })
+    } catch (error) {
+      if (db.isTransaction) db.exec('ROLLBACK')
+      throw error // 交给已有错误处理中间件返回 500 和中文提示。
+    }
+  })
+
   app.post('/api/repairs', (req, res) => {
     if (!req.is('application/json')) return res.status(415).json({ success: false, message: '请使用 application/json 格式提交' })
     const body = req.body

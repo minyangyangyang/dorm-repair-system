@@ -2,17 +2,21 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { openDatabase, databasePath } from '../src/database.js'
+import { createApp } from '../src/app.js'
 
 const cwd = fileURLToPath(new URL('..', import.meta.url))
 const port = 3107
 const baseUrl = `http://localhost:${port}`
 
-async function startServer() {
+async function startServer(testDatabasePath) {
   const child = spawn(process.execPath, ['src/server.js'], {
-    cwd, env: { ...process.env, PORT: String(port) }, windowsHide: true,
+    cwd, env: { ...process.env, PORT: String(port), DB_PATH: testDatabasePath }, windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let output = ''
@@ -42,11 +46,67 @@ async function stopServer(child) {
   await exited
 }
 
+test('统计接口：空库、零值字段、SQL 真实数量、实时更新及异常恢复', async () => {
+  const testPath = join(mkdtempSync(join(tmpdir(), 'dorm-statistics-test-')), 'repairs.sqlite')
+  const db = openDatabase(testPath)
+  const server = createApp(db).listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const url = `http://127.0.0.1:${server.address().port}/api/statistics`
+  const states = ['待处理', '已接单', '维修中', '已完成']
+  const categories = ['水电', '家具', '网络', '门窗', '其他']
+  try {
+    const emptyResponse = await fetch(url)
+    assert.equal(emptyResponse.status, 200)
+    const empty = await emptyResponse.json()
+    assert.equal(empty.success, true)
+    assert.deepEqual(empty.data, {
+      total: 0, completed: 0, completionRate: 0,
+      statusDistribution: Object.fromEntries(states.map(state => [state, 0])),
+      categoryDistribution: Object.fromEntries(categories.map(category => [category, 0])),
+    })
+    const insert = db.prepare(`INSERT INTO repair_orders
+      (order_no, building, room, category, description, contact_name, contact_phone, status, created_at, updated_at)
+      VALUES (?, '测试楼', '101', ?, '统计测试', '测试同学', '13800000000', ?, ?, ?)`)
+    // 固定测试数据仅用于验证期望值，不进入正式数据库或业务 API。
+    const fixtures = [['水电', '待处理'], ['水电', '已接单'], ['家具', '已完成'], ['网络', '已完成'], ['门窗', '待处理'], ['家具', '待处理']]
+    fixtures.forEach(([category, state], index) => insert.run(`STAT-${index}`, category, state, new Date().toISOString(), new Date().toISOString()))
+    const data = (await (await fetch(url)).json()).data
+    const actualOrders = db.prepare('SELECT status, category FROM repair_orders').all()
+    assert.equal(data.total, db.prepare('SELECT COUNT(*) AS count FROM repair_orders').get().count)
+    for (const state of states) assert.equal(data.statusDistribution[state], actualOrders.filter(order => order.status === state).length)
+    for (const category of categories) assert.equal(data.categoryDistribution[category], actualOrders.filter(order => order.category === category).length)
+    assert.equal(data.statusDistribution['维修中'], 0)
+    assert.equal(data.categoryDistribution['其他'], 0)
+    assert.equal(Object.values(data.statusDistribution).reduce((sum, count) => sum + count, 0), data.total)
+    assert.equal(Object.values(data.categoryDistribution).reduce((sum, count) => sum + count, 0), data.total)
+    assert.equal(data.completed, data.statusDistribution['已完成'])
+    assert.equal(data.completionRate, 33.33)
+    insert.run('STAT-new', '其他', '维修中', new Date().toISOString(), new Date().toISOString())
+    const latest = (await (await fetch(url)).json()).data
+    assert.equal(latest.total, 7)
+    assert.equal(latest.statusDistribution['维修中'], 1)
+    assert.equal(latest.categoryDistribution['其他'], 1)
+    assert.equal(latest.completionRate, 28.57)
+    db.exec('DROP TABLE evaluations; DROP TABLE repair_orders') // 仅故障注入到独立测试库。
+    const failed = await fetch(url)
+    assert.equal(failed.status, 500)
+    assert.deepEqual(await failed.json(), { success: false, message: '服务器处理失败，请稍后重试' })
+    assert.equal(db.isTransaction, false, '失败后应回滚只读事务')
+    assert.equal((await fetch(url.replace('/statistics', '/health'))).status, 200, '数据库查询异常不得终止服务')
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    db.close()
+  }
+})
+
 test('真实服务器：校验、SQLite 写入、查询、重启持久化及数据库约束', { timeout: 30000 }, async () => {
+  const testDatabasePath = join(mkdtempSync(join(tmpdir(), 'dorm-api-test-')), 'repairs.sqlite')
+  const fingerprint = () => existsSync(databasePath) ? createHash('sha256').update(readFileSync(databasePath)).digest('hex') : null
+  const originalFingerprint = fingerprint()
   let server
   try {
-    server = await startServer()
-    assert.ok(existsSync(databasePath), '首次启动应自动创建数据库')
+    server = await startServer(testDatabasePath)
+    assert.ok(existsSync(testDatabasePath), '首次启动应自动创建测试数据库')
     const health = await fetch(`${baseUrl}/api/health`)
     assert.equal(health.status, 200)
     assert.equal((await health.json()).message, '宿舍报修系统后端运行正常')
@@ -162,14 +222,14 @@ test('真实服务器：校验、SQLite 写入、查询、重启持久化及数�
     assert.deepEqual(parallelEvaluations.map(item => item.status).sort(), [201, 409])
     assert.equal((await (await getEvaluation(concurrentOrder.id)).json()).data.comment, '')
     await stopServer(server)
-    server = await startServer()
+    server = await startServer(testDatabasePath)
     const afterRestart = await (await fetch(`${baseUrl}/api/repairs`)).json()
     assert.deepEqual(afterRestart.data.find(order => order.id === created.id), created)
     assert.equal(created.status, '已完成', '重启后必须仍为已完成')
     assert.deepEqual((await (await getEvaluation(created.id)).json()).data, evaluation, '重启后评价仍保留')
     await stopServer(server)
     server = null
-    const db = openDatabase()
+    const db = openDatabase(testDatabasePath)
     try {
       assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1)
       assert.deepEqual({ ...db.prepare('SELECT * FROM evaluations WHERE repair_order_id = ?').get(created.id) }, evaluation)
@@ -184,6 +244,9 @@ test('真实服务器：校验、SQLite 写入、查询、重启持久化及数�
       assert.throws(() => db.prepare('UPDATE repair_orders SET status = ? WHERE id = ?').run('非法状态', created.id), /CHECK/)
       assert.throws(() => db.prepare('INSERT INTO repair_orders SELECT * FROM repair_orders WHERE id = ?').run(created.id), /UNIQUE/)
     } finally { db.close() }
-    console.log(`测试通过，测试工单已保留在实际数据库中：${created.order_no}`)
-  } finally { await stopServer(server) }
+    console.log(`测试通过，独立测试数据库：${testDatabasePath}`)
+  } finally {
+    await stopServer(server)
+    assert.equal(fingerprint(), originalFingerprint, '自动测试不得改变正式数据库文件')
+  }
 })
