@@ -212,3 +212,49 @@ npm.cmd test
 - `data/repairs.sqlite`：运行时自动生成的持久化数据库。
 
 技术参考：[Node.js SQLite 文档](https://nodejs.org/api/sqlite.html)、[Express CORS 文档](https://expressjs.com/en/resources/middleware/cors/)。
+
+
+## AI 智能报修助手（可选）
+
+默认不启用，必须显式选择模式。完整接口、安全边界与测试见 [AI-REPAIR.md](AI-REPAIR.md)。
+
+### 无密钥规则演示
+
+在项目根目录 PowerShell 中，先指定新的临时数据库与上传目录，避免迁移正式库：
+
+```powershell
+$env:DB_PATH = Join-Path ([System.IO.Path]::GetTempPath()) ('dorm-ai-' + [guid]::NewGuid().ToString() + '.sqlite')
+$env:UPLOAD_DIR = Join-Path ([System.IO.Path]::GetTempPath()) ('dorm-ai-photos-' + [guid]::NewGuid().ToString())
+$env:AUTH_ALLOWED_ORIGINS = 'http://localhost:5173'
+$env:AI_MODE = 'rules'
+node backend/src/server.js
+```
+
+另开终端运行 npm.cmd --prefix frontend run dev。学生注册并登录后即可在报修表单点击分析。
+界面明确标识“规则演示（非大模型）”；不需要 Key。
+
+### 真实 AI 模式
+
+保留上述临时 DB_PATH / UPLOAD_DIR 配置。后端选择：
+
+```powershell
+$env:AI_MODE = 'remote'
+$env:AI_PROVIDER = 'chat-completions'
+$env:AI_ENDPOINT = 'https://api.deepseek.com/chat/completions'
+$env:AI_MODEL = '填写提供商实际可用且支持 JSON 输出的模型标识'
+$env:AI_TIMEOUT_MS = '8000'
+```
+
+模型标识需替换为提供商允许的实际值。不要把密钥写进源码、命令历史或前端环境变量。
+可由部署系统注入 AI_API_KEY；本机 PowerShell 可隐藏输入：
+
+```powershell
+$aiSecret = Read-Host 'AI API Key（仅保存在后端进程环境）' -AsSecureString
+$aiCredential = [System.Management.Automation.PSCredential]::new('ai', $aiSecret)
+$env:AI_API_KEY = $aiCredential.GetNetworkCredential().Password
+Remove-Variable aiCredential, aiSecret
+node backend/src/server.js
+```
+
+Key 仅由服务端读取；不要将其发送到聊天。服务失败会明确报错，不会自动切换规则模式。
+两种模式都只提供参考建议，不会自动提交或修改工单；关闭 AI 仍可正常报修。

@@ -6,6 +6,7 @@ import { createRepair, getRepairs, acceptRepair, updateRepairStatus, getWorkers,
 import EvaluationPanel from './EvaluationPanel.vue'
 import StatisticsPage from './StatisticsPage.vue'
 import RepairDetails from './RepairDetails.vue'
+import AiRepairAssistant from './AiRepairAssistant.vue'
 import ImagePicker from './ImagePicker.vue'
 import { uploadAttachments, getAttachments } from '../api/attachments.js'
 import AdminWorkers from './AdminWorkers.vue'
@@ -204,7 +205,7 @@ async function submit() {
             <input v-else :id="key" v-model="form[key]" required :type="key === 'phone' ? 'tel' : 'text'" :maxlength="key === 'phone' ? 11 : 50" :autocomplete="key === 'phone' ? 'tel' : key === 'contact' ? 'name' : 'off'" :placeholder="key === 'building' ? '例如：3号楼' : key === 'room' ? '例如：302' : key === 'phone' ? '请输入11位手机号码' : '请输入联系人姓名'" :aria-invalid="!!errors[key]" :aria-describedby="errors[key] ? `${key}-error` : undefined" />
             <p v-if="errors[key]" :id="`${key}-error`" class="error">{{ errors[key] }}</p><p v-if="key === 'description'" class="char-count">{{ form.description.length }}/500</p>
           </div>
-        </div><ImagePicker v-model="photos" :disabled="submitting" /></fieldset><div class="form-actions"><span>提交后可在“我的报修”中查看记录。</span><button class="primary" type="submit" :disabled="submitting || loading || !!uploadOrder">{{ submitting ? '正在提交……' : '提交报修 →' }}</button></div></form>
+        </div><AiRepairAssistant :description="form.description" :categories="categories" :disabled="submitting" @accept="form.category=$event" /><ImagePicker v-model="photos" :disabled="submitting" /></fieldset><div class="form-actions"><span>提交后可在“我的报修”中查看记录。</span><button class="primary" type="submit" :disabled="submitting || loading || !!uploadOrder">{{ submitting ? '正在提交……' : '提交报修 →' }}</button></div></form>
       </section>
 
     </template>

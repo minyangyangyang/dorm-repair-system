@@ -1,3 +1,4 @@
+import { analyzeRepair } from '../src/api/ai.js'
 import { uploadAttachments, getAttachmentBlob } from '../src/api/attachments.js'
 import { getNotifications, getUnreadCount, markNotificationRead, markAllNotificationsRead } from '../src/api/notifications.js'
 import test from 'node:test'
@@ -125,5 +126,25 @@ test('旧账号图片响应体完成后不得返回供新账号生成对象 URL'
   try{
     const pending=getAttachmentBlob(42,1),rejected=assert.rejects(pending,error=>error.code==='STALE')
     await started;resetRequests();finish(new Blob(['old']));await rejected
+  }finally{globalThis.fetch=original;resetRequests()}
+})
+
+test('AI 请求仅发送描述并使用统一防护，账号切换后丢弃旧分析',async()=>{
+  const original=globalThis.fetch
+  const calls=[]
+  globalThis.fetch=async(url,options)=>{calls.push({url,options});return response(200,{success:true,data:{mode:'rules'}})}
+  try{
+    await analyzeRepair('宿舍水龙头持续漏水需要维修')
+    assert.equal(calls[0].url,'/api/ai/analyze-repair')
+    assert.deepEqual(JSON.parse(calls[0].options.body),{description:'宿舍水龙头持续漏水需要维修'})
+    assert.equal(calls[0].options.credentials,'include')
+    assert.equal(calls[0].options.headers['X-Auth-Request'],'1')
+    let finish
+    globalThis.fetch=()=>new Promise(resolve=>{finish=resolve})
+    const pending=analyzeRepair('旧账号故障描述不得重新显示')
+    const rejected=assert.rejects(pending,error=>error.code==='STALE')
+    resetRequests()
+    finish(response(200,{success:true,data:{mode:'rules',recommended_category:'其他'}}))
+    await rejected
   }finally{globalThis.fetch=original;resetRequests()}
 })

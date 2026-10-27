@@ -216,3 +216,13 @@ nav button { padding-inline: 10px; }
 .photo-dialog img { display:block; max-width:85vw; max-height:72vh; object-fit:contain; margin-top:12px; }
 .upload-recovery { margin-bottom:24px; }
 @media(max-width:540px) { .photo-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .photo-grid img { height:120px; } .photo-input { padding:8px; } }
+
+/* Optional AI repair guidance */
+.ai-repair-assistant { margin-top:20px; padding:18px; border:1px solid #dfe9e3; border-radius:10px; background:#f5f9f6; }
+.ai-repair-assistant .section-heading { flex-wrap:wrap; }
+.ai-repair-assistant h3 { font-size:15px; }
+.ai-result { margin-top:16px; font-size:14px; line-height:1.8; overflow-wrap:anywhere; }
+.ai-result h4 { font-size:13px; margin:14px 0 6px; }
+.ai-result ul { margin:0; padding-left:22px; }
+.ai-mode { display:inline-block; background:#e2eee6; color:#167966; border-radius:5px; padding:4px 9px; margin-bottom:10px; font-size:12px; }
+@media(max-width:540px) { .ai-repair-assistant { padding:14px; } }

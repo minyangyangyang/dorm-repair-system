@@ -1,3 +1,5 @@
+import { createAiRouter } from './ai.js'
+import { repairCategories as categories } from './repair-categories.js'
 import { createAttachmentsRouter } from './attachments.js'
 import { createNotificationsRouter } from './notifications.js'
 import { appendRepairLog, withRepairTransaction, timelineHandler } from './repair-logs.js'
@@ -8,7 +10,6 @@ import express from 'express'
 import { randomUUID } from 'node:crypto'
 
 const fields = { building: '宿舍楼', room: '房间号', category: '故障类别', description: '问题描述', contact_name: '联系人', contact_phone: '联系电话' }
-const categories = ['水电', '家具', '网络', '门窗', '其他']
 // 后端最终决定状态规则；已完成没有下一步，不允许跳级、回退或重复设置。
 const nextStatus = new Map([['待处理', '已接单'], ['已接单', '维修中'], ['维修中', '已完成']])
 const statuses = ['待处理', '已接单', '维修中', '已完成']
@@ -29,6 +30,7 @@ export function createApp(db, options = {}) {
   app.use('/api', requireSession(db), security.protectWrite)
   app.use('/api/repairs', createAttachmentsRouter(db, options.uploads))
   app.use('/api', express.json({ limit: '32kb' }))
+  app.use('/api/ai', createAiRouter(db, options.ai))
   app.use('/api/notifications', createNotificationsRouter(db))
   app.use('/api/admin', createAdminRouter(db))
   app.patch('/api/repairs/:id/assignment', requireRoles('admin'), assignOrder(db))
