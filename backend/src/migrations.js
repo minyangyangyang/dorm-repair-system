@@ -62,6 +62,27 @@ export function migrateDatabase(db) {
       // Do not infer or backfill events for existing orders.
       db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)').run(new Date().toISOString())
     }
+
+    if (!db.prepare('SELECT version FROM schema_migrations WHERE version = 3').get()) {
+      db.exec(`
+        CREATE TABLE notifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          recipient_id INTEGER NOT NULL REFERENCES users(id),
+          event_type TEXT NOT NULL CHECK(event_type IN ('created', 'accepted', 'assigned', 'reassigned', 'started', 'completed')),
+          repair_order_id INTEGER NOT NULL REFERENCES repair_orders(id),
+          source_log_id INTEGER NOT NULL REFERENCES repair_logs(id),
+          title TEXT NOT NULL CHECK(length(title) BETWEEN 1 AND 100),
+          content TEXT NOT NULL CHECK(length(content) BETWEEN 1 AND 500),
+          created_at TEXT NOT NULL,
+          read_at TEXT,
+          UNIQUE(recipient_id, source_log_id)
+        );
+        CREATE INDEX idx_notifications_recipient_time ON notifications(recipient_id, created_at DESC, id DESC);
+        CREATE INDEX idx_notifications_unread_time ON notifications(recipient_id, created_at DESC, id DESC) WHERE read_at IS NULL;
+      `)
+      // Existing logs and historical orders are intentionally not replayed.
+      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)').run(new Date().toISOString())
+    }
     db.exec('COMMIT')
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK')

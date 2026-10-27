@@ -7,15 +7,29 @@ import EvaluationPanel from './EvaluationPanel.vue'
 import StatisticsPage from './StatisticsPage.vue'
 import RepairDetails from './RepairDetails.vue'
 import AdminWorkers from './AdminWorkers.vue'
+import MessageCenter from './MessageCenter.vue'
+import { getUnreadCount } from '../api/notifications.js'
 
 const props = defineProps({ user: { type: Object, required: true } })
 const role = computed(() => props.user.role)
 const roleNames = { student: '学生', worker: '维修人员', admin: '管理员' }
 const page = ref('home')
 const navigation = computed(() => role.value === 'student'
-  ? { home: '首页', submit: '提交报修', records: '我的工单', statistics: '我的统计' }
-  : role.value === 'worker' ? { home: '首页', pending: '待接单', tasks: '我的维修任务', statistics: '我的统计' }
-  : { home: '首页', orders: '全部工单', workers: '维修人员', statistics: '全量统计' })
+  ? { home: '首页', submit: '提交报修', records: '我的工单', statistics: '我的统计', messages: '消息中心' }
+  : role.value === 'worker' ? { home: '首页', pending: '待接单', tasks: '我的维修任务', statistics: '我的统计', messages: '消息中心' }
+  : { home: '首页', orders: '全部工单', workers: '维修人员', statistics: '全量统计', messages: '消息中心' })
+const unreadCount = ref(null)
+const unreadError = ref('')
+let unreadSequence = 0
+async function loadUnread() {
+  const started = ++unreadSequence
+  try {
+    const result = await getUnreadCount()
+    if (active && started === unreadSequence) { unreadCount.value = result.count; unreadError.value = '' }
+  } catch (issue) {
+    if (active && started === unreadSequence && !isCancelled(issue)) { unreadCount.value = null; unreadError.value = issue.message }
+  }
+}
 const statuses = ['待处理', '已接单', '维修中', '已完成']
 const categories = ['水电', '家具', '网络', '门窗', '其他']
 const statusStyles = { 待处理: 'pending', 已接单: 'accepted', 维修中: 'working', 已完成: 'completed' }
@@ -42,7 +56,7 @@ let active = true
 let listSequence = 0
 let workerSequence = 0
 onBeforeUnmount(() => {
-  active = false; listSequence++; workerSequence++
+  active = false; listSequence++; workerSequence++; unreadSequence++; unreadCount.value = null
   records.value = []; workers.value = []
   Object.assign(form, blank())
   for (const key of Object.keys(evaluations)) delete evaluations[key]
@@ -70,8 +84,8 @@ async function loadWorkers() {
   } finally { if (active && sequence === workerSequence) workersLoading.value = false }
 }
 function handleUnavailable(issue) { actionError.value = issue?.message || '工单已不可访问'; loadRepairs() }
-onMounted(() => { loadRepairs(); if (role.value === 'admin') loadWorkers() })
-function navigate(target) { page.value = target; statusFilter.value = ''; categoryFilter.value = ''; message.value = ''; actionError.value = '' }
+onMounted(() => { loadUnread(); loadRepairs(); if (role.value === 'admin') loadWorkers() })
+function navigate(target) { if (target !== 'messages') loadUnread(); page.value = target; statusFilter.value = ''; categoryFilter.value = ''; message.value = ''; actionError.value = '' }
 const isPending = record => role.value === 'worker' && record.assignedWorkerId === null && record.status === '待处理'
 const scopedRecords = computed(() => role.value !== 'worker' ? records.value :
   page.value === 'pending' ? records.value.filter(isPending) : records.value.filter(record => record.assignedWorkerId === props.user.id))
@@ -91,7 +105,7 @@ async function mutate(record, action) {
     await action()
     if (!active) return
     message.value = '工单操作成功，列表已刷新。'
-    await loadRepairs()
+    await loadRepairs(); loadUnread()
   } catch (issue) {
     if (!active || isCancelled(issue)) return
     const prefix = { 403: '无权操作：', 404: '工单已不可访问：', 409: '工单已变化：' }[issue.status] || ''
@@ -120,7 +134,7 @@ async function submit() {
   try {
     await createRepair(form)
     if (!active) return
-    Object.assign(form, blank()); page.value = 'records'; message.value = '报修提交成功。'
+    Object.assign(form, blank()); page.value = 'records'; message.value = '报修提交成功。'; loadUnread()
     await loadRepairs()
   } catch (issue) { if (active && !isCancelled(issue)) submitError.value = issue.message }
   finally { if (active) submitting.value = false }
@@ -130,13 +144,14 @@ async function submit() {
 <template>
   <header class="topbar"><div class="header-inner">
     <a class="brand" href="#" @click.prevent="navigate('home')"><span class="brand-icon">修</span><span>宿舍报修管理系统<small>校园生活服务平台</small></span></a>
-    <nav aria-label="主导航"><button v-for="(label, target) in navigation" :key="target" :class="{ active: page === target }" :aria-current="page === target ? 'page' : undefined" @click="navigate(target)">{{ label }}</button></nav>
+    <nav aria-label="主导航"><button v-for="(label, target) in navigation" :key="target" :data-page="target" :class="{ active: page === target }" :aria-current="page === target ? 'page' : undefined" @click="navigate(target)">{{ label }}<span v-if="target === 'messages'" class="notification-badge" :title="unreadError || '未读消息数量'">{{ unreadCount === null ? '—' : unreadCount }}</span></button></nav>
     <div class="identity account-identity"><span>{{ user.display_name }} · {{ roleNames[role] }}</span><button class="secondary" @click="logout">退出登录</button></div>
   </div></header>
   <main>
     <p v-if="message" class="success" role="status">{{ message }}</p>
     <p v-if="actionError" class="request-error" role="alert">{{ actionError }}</p>
-    <StatisticsPage v-if="page === 'statistics'" :scope-label="role === 'admin' ? '全部工单' : role === 'worker' ? '本人负责工单' : '我的工单'" />
+    <MessageCenter v-if="page === 'messages'" @changed="loadUnread" />
+    <StatisticsPage v-else-if="page === 'statistics'" :scope-label="role === 'admin' ? '全部工单' : role === 'worker' ? '本人负责工单' : '我的工单'" />
     <AdminWorkers v-else-if="page === 'workers' && role === 'admin'" :workers="workers" :loading="workersLoading" :error="workersError" @refresh="loadWorkers" />
     <template v-else-if="page === 'home'">
       <section class="welcome"><span class="eyebrow">{{ roleNames[role] }}工作台</span><h1>{{ user.display_name }}，欢迎回来。</h1><p>在这里查看工单进度，处理宿舍维修事务。</p><button class="primary" @click="navigate(role === 'student' ? 'submit' : role === 'worker' ? 'pending' : 'orders')">{{ role === 'student' ? '提交报修' : role === 'worker' ? '查看待接单' : '查看全部工单' }}</button></section>

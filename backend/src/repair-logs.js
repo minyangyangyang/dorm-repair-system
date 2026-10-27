@@ -1,3 +1,4 @@
+import { notifyRepairEvent } from './notifications.js'
 import { fail, positiveId, visibleOrder } from './permissions.js'
 
 // Synchronous callbacks only: never yield while holding a SQLite transaction.
@@ -15,13 +16,14 @@ export function withRepairTransaction(db, work) {
 
 export function appendRepairLog(db, type, actor, before, after) {
   if (!db.isTransaction) throw new Error('repair logs must share the business transaction')
-  db.prepare(`INSERT INTO repair_logs (
+  const result = db.prepare(`INSERT INTO repair_logs (
     repair_order_id, event_type, actor_id, actor_display_name, actor_role, occurred_at,
     from_status, to_status, from_worker_id, to_worker_id
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     after.id, type, actor.id, actor.display_name, actor.role, new Date().toISOString(),
     before?.status ?? null, after.status, before?.assigned_worker_id ?? null, after.assigned_worker_id,
   )
+  notifyRepairEvent(db, type, before, after, Number(result.lastInsertRowid))
 }
 
 export function timelineHandler(db) {

@@ -1,3 +1,4 @@
+import { getNotifications, getUnreadCount, markNotificationRead, markAllNotificationsRead } from '../src/api/notifications.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { ApiError, request, resetRequests, onUnauthorized } from '../src/api/client.js'
@@ -67,4 +68,30 @@ test('响应体读取期间切换账号同样丢弃旧数据', async () => {
     finish({ success: true, data: { total: 999 } })
     await rejected
   } finally { globalThis.fetch = original; resetRequests() }
+})
+
+test('消息 API 使用本人接口、分页、凭据和统一写防护', async () => {
+  const original = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (url, options) => { calls.push({url, options}); return response(200, {success:true, data:{items:[],count:0}}) }
+  try {
+    await getNotifications(2,20); await getUnreadCount(); await markNotificationRead(42); await markAllNotificationsRead()
+    assert.deepEqual(calls.map(call=>call.url), ['/api/notifications?page=2&limit=20','/api/notifications/unread-count',
+      '/api/notifications/42/read','/api/notifications/read-all'])
+    assert.equal(calls.every(call=>call.options.credentials === 'include'),true)
+    for (const call of calls.slice(2)) {
+      assert.equal(call.options.method,'PATCH')
+      assert.equal(call.options.headers['X-Auth-Request'],'1')
+      assert.deepEqual(JSON.parse(call.options.body),{})
+    }
+    for (const path of ['/notifications','/notifications/unread-count']) {
+      let finish
+      globalThis.fetch = () => new Promise(resolve=>{finish=resolve})
+      const pending = request(path)
+      const rejected = assert.rejects(pending,error=>error.code === 'STALE')
+      resetRequests()
+      finish(response(200,{success:true,data:{items:[{title:'旧账号消息'}],count:99}}))
+      await rejected
+    }
+  } finally { globalThis.fetch=original; resetRequests() }
 })
