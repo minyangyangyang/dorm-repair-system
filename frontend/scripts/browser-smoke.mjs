@@ -168,6 +168,23 @@ try {
   assert.equal(await contains('OTHER-PRIVATE'), false)
   const order = db.prepare("SELECT * FROM repair_orders WHERE description='浏览器维修流程'").get()
   const student = db.prepare("SELECT id FROM users WHERE username='browser_student'").get()
+  await clickRow(order.order_no, '查看详情')
+  await waitText('维修进度时间轴'); await waitText('未完成')
+  assert.equal(await evaluate('document.querySelector(".timeline-events")?.textContent.includes("浏览器学生")'), true)
+  await clickRow(order.order_no, '收起详情')
+  // Fail only timeline loading: the independent basic-detail request must still succeed.
+  cdp.on('Fetch.requestPaused', event => {
+    cdp.send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: 503,
+      responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+      body: Buffer.from(JSON.stringify({ success: false, message: '测试时间轴服务暂不可用' })).toString('base64') }).catch(() => {})
+  })
+  await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*timeline', requestStage: 'Request' }] })
+  await clickRow(order.order_no, '查看详情')
+  await waitText('维修记录加载失败')
+  assert.equal(await evaluate('Array.from(document.querySelectorAll(".details-fields dd")).some(node=>node.textContent==="13800000000")'), true)
+  await cdp.send('Fetch.disable')
+  await click('button', '重试时间轴')
+  await eventually(() => evaluate('!!document.querySelector(".timeline-events")'), '时间轴独立重试恢复')
   await cdp.send('Page.reload')
   await eventually(() => evaluate('!!document.querySelector("nav")'), '刷新恢复会话')
   await nav('我的工单'); await waitText(order.order_no); await noOverflow()
@@ -198,7 +215,10 @@ try {
   await assign(worker1, '派单')
   await assign(worker2, '改派')
   assert.equal(db.prepare('SELECT status FROM repair_orders WHERE id=?').get(order.id).status, '已接单')
-  passed('管理员创建维修账号、派单和携带快照改派')
+  await clickRow(order.order_no, '查看详情')
+  await eventually(() => evaluate('document.querySelector(".timeline-events")?.textContent.includes("管理员改派")'), '派改日志')
+  assert.deepEqual(db.prepare('SELECT event_type FROM repair_logs WHERE repair_order_id=? ORDER BY occurred_at,id').all(order.id).map(row=>row.event_type), ['created','assigned','reassigned'])
+  passed('管理员创建维修账号、派单和携带快照改派、持久化时间轴')
   await logout()
 
   await login('browser_worker2'); await nav('待接单')
@@ -207,6 +227,10 @@ try {
   await clickRow('LEGACY-PENDING', '接单')
   await nav('我的维修任务')
   await waitText('历史隐私内容')
+  await clickRow('LEGACY-PENDING', '查看详情')
+  await waitText('历史记录不完整')
+  await eventually(() => evaluate('document.querySelector(".timeline-events")?.textContent.includes("维修人员接单")'), '历史工单只显示新增真实日志')
+  await clickRow('LEGACY-PENDING', '收起详情')
   await clickRow(order.order_no, '查看详情')
   await eventually(() => evaluate('Array.from(document.querySelectorAll(".details-fields dd")).some(e=>e.textContent==="13800000000")'), '接单后完整详情')
   await clickRow(order.order_no, '开始维修')
@@ -233,7 +257,13 @@ try {
   await waitText('维修评价提交成功')
   await nav('我的统计'); await waitText('完成率'); await noOverflow()
   assert.equal(db.prepare('SELECT count(*) AS n FROM evaluations WHERE repair_order_id=?').get(order.id).n, 1)
-  passed('学生评价、统计和手机布局')
+  await nav('我的工单')
+  await clickRow(order.order_no, '查看详情')
+  await eventually(() => evaluate('document.querySelector(".timeline-events")?.textContent.includes("维修完成")'), '完整维修时间轴')
+  await noOverflow()
+  assert.deepEqual(db.prepare('SELECT event_type FROM repair_logs WHERE repair_order_id=? ORDER BY occurred_at,id').all(order.id).map(row=>row.event_type),
+    ['created','assigned','reassigned','started','completed'])
+  passed('学生评价、统计、完整时间轴和手机布局')
 
   // Controlled test-fixture changes exercise real 403/404/401 responses; production rules are unchanged.
   await nav('提交报修')

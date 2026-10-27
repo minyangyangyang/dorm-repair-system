@@ -37,6 +37,31 @@ export function migrateDatabase(db) {
       `)
       db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (1, ?)').run(new Date().toISOString())
     }
+
+    if (!db.prepare('SELECT version FROM schema_migrations WHERE version = 2').get()) {
+      db.exec(`
+        CREATE TABLE repair_logs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          repair_order_id INTEGER NOT NULL REFERENCES repair_orders(id),
+          event_type TEXT NOT NULL CHECK(event_type IN ('created', 'accepted', 'assigned', 'reassigned', 'started', 'completed')),
+          actor_id INTEGER NOT NULL REFERENCES users(id),
+          actor_display_name TEXT NOT NULL,
+          actor_role TEXT NOT NULL CHECK(actor_role IN ('student', 'worker', 'admin')),
+          occurred_at TEXT NOT NULL,
+          from_status TEXT CHECK(from_status IN ('待处理', '已接单', '维修中', '已完成')),
+          to_status TEXT NOT NULL CHECK(to_status IN ('待处理', '已接单', '维修中', '已完成')),
+          from_worker_id INTEGER REFERENCES users(id),
+          to_worker_id INTEGER REFERENCES users(id)
+        );
+        CREATE INDEX idx_repair_logs_order_time ON repair_logs(repair_order_id, occurred_at, id);
+        CREATE TRIGGER repair_logs_no_update BEFORE UPDATE ON repair_logs
+          BEGIN SELECT RAISE(ABORT, 'repair logs are append-only'); END;
+        CREATE TRIGGER repair_logs_no_delete BEFORE DELETE ON repair_logs
+          BEGIN SELECT RAISE(ABORT, 'repair logs are append-only'); END;
+      `)
+      // Do not infer or backfill events for existing orders.
+      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (2, ?)').run(new Date().toISOString())
+    }
     db.exec('COMMIT')
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK')

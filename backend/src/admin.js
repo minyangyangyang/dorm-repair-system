@@ -1,3 +1,4 @@
+import { appendRepairLog } from './repair-logs.js'
 import { Router } from 'express'
 import { hashPassword, normalizeUsername, publicUser, validateAccount } from './accounts.js'
 import { readSession } from './auth.js'
@@ -109,6 +110,7 @@ export function assignOrder(db) {
         return fail(res, 409, '工单已变化，请重新读取后操作')
       }
       const updated = db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(id)
+      appendRepairLog(db, order.status === '待处理' ? 'assigned' : 'reassigned', req.user, order, updated)
       db.exec('COMMIT')
       res.json({ success: true, message: '派单成功', data: updated })
     } catch (error) {

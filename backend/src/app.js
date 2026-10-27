@@ -1,3 +1,4 @@
+import { appendRepairLog, withRepairTransaction, timelineHandler } from './repair-logs.js'
 import { createAuthRouter, createRequestSecurity } from './auth.js'
 import { createAdminRouter, assignOrder } from './admin.js'
 import { fail, nextUpdatedAt, positiveId, requireRoles, requireSession, orderScope, visibleOrder, visibleOrders } from './permissions.js'
@@ -26,6 +27,8 @@ export function createApp(db, options = {}) {
   app.use('/api', requireSession(db), security.protectWrite, express.json({ limit: '32kb' }))
   app.use('/api/admin', createAdminRouter(db))
   app.patch('/api/repairs/:id/assignment', requireRoles('admin'), assignOrder(db))
+
+  app.get('/api/repairs/:id/timeline', timelineHandler(db))
 
   app.get('/api/repairs/:id', (req, res) => {
     const id = positiveId(req.params.id)
@@ -85,11 +88,15 @@ export function createApp(db, options = {}) {
     // UUID 降低编号碰撞概率，数据库 UNIQUE 约束再次保证唯一性。
     const now = new Date().toISOString()
     const orderNo = `BX${now.slice(0, 10).replaceAll('-', '')}-${randomUUID()}`
+    const created = withRepairTransaction(db, () => {
     const result = db.prepare(`INSERT INTO repair_orders
       (order_no, building, room, category, description, contact_name, contact_phone, status, created_at, updated_at, student_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, '待处理', ?, ?, ?)`)
       .run(orderNo, order.building, order.room, order.category, order.description, order.contact_name, order.contact_phone, now, now, req.user.id)
     const created = db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(result.lastInsertRowid)
+    appendRepairLog(db, 'created', req.user, null, created)
+    return created
+    })
     res.status(201).json({ success: true, message: '报修工单创建成功', data: created })
   })
 
@@ -100,10 +107,14 @@ export function createApp(db, options = {}) {
     const order = db.prepare("SELECT updated_at FROM repair_orders WHERE id = ? AND status = '待处理' AND assigned_worker_id IS NULL").get(id)
     // Opaque conflict: do not distinguish a missing order from one already claimed by another worker.
     if (!order) return fail(res, 409, '工单已不可接单，请刷新列表')
+    const updated = withRepairTransaction(db, () => {
     const updated = db.prepare(`UPDATE repair_orders
       SET status = '已接单', assigned_worker_id = ?, updated_at = ?
       WHERE id = ? AND status = '待处理' AND assigned_worker_id IS NULL AND updated_at = ?
       RETURNING *`).get(req.user.id, nextUpdatedAt(order), id, order.updated_at)
+    if (updated) appendRepairLog(db, 'accepted', req.user, { status: '待处理', assigned_worker_id: null }, updated)
+    return updated
+    })
     if (!updated) return fail(res, 409, '工单已不可接单，请刷新列表')
     res.json({ success: true, message: '接单成功', data: updated })
   }
@@ -125,9 +136,13 @@ export function createApp(db, options = {}) {
       return fail(res, 409, `不能从“${order.status}”变为“${status}”：状态不可跳级、回退或重复设置，已完成工单不可再操作`)
     }
     if (order.assigned_worker_id !== req.user.id) return fail(res, 404, '工单不存在')
+    const updated = withRepairTransaction(db, () => {
     const updated = db.prepare(`UPDATE repair_orders SET status = ?, updated_at = ?
       WHERE id = ? AND status = ? AND assigned_worker_id = ? AND updated_at = ?
       RETURNING *`).get(status, nextUpdatedAt(order), id, order.status, req.user.id, order.updated_at)
+    if (updated) appendRepairLog(db, status === '维修中' ? 'started' : 'completed', req.user, order, updated)
+    return updated
+    })
     if (!updated) return fail(res, 409, '工单状态或负责人已变化，请重新读取后再操作')
     res.json({ success: true, message: `工单状态已更新为“${status}”`, data: updated })
   })

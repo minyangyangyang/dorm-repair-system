@@ -177,3 +177,18 @@ nav button { padding-inline: 10px; }
   .brand { max-width: 100%; }
   .category { flex-shrink: 0; }
 }
+
+/* Persistent repair timeline */
+.repair-timeline { margin-top: 24px; padding-top: 20px; border-top: 1px solid #dfe9e3; }
+.repair-timeline h3 { font-size: 15px; margin-bottom: 14px; }
+.timeline-history { color: #8c672a; background: #fff7e8; padding: 12px; border-radius: 8px; font-size: 12px; line-height: 1.8; }
+.timeline-steps { list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 16px 0; padding: 0; }
+.timeline-steps li { min-width: 0; padding: 10px; background: #eef5f0; border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.timeline-steps strong { display: block; color: #167966; margin-top: 8px; font-weight: 500; }
+.timeline-steps .timeline-pending { color: #819087; }
+.timeline-events { list-style: none; border-left: 2px solid #c5ddd1; margin: 18px 0 0 5px; padding: 0 0 0 22px; }
+.timeline-events li { position: relative; padding: 0 0 22px; overflow-wrap: anywhere; font-size: 13px; }
+.timeline-events li::before { content: ''; position: absolute; left: -28px; top: 3px; width: 10px; height: 10px; background: #278c76; border-radius: 50%; }
+.timeline-events time { display: block; font-size: 12px; color: #71867a; margin-top: 6px; }
+.timeline-events p { margin-top: 7px; color: #60766b; line-height: 1.8; }
+@media (max-width: 540px) { .timeline-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

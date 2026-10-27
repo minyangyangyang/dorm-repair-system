@@ -36,3 +36,5 @@ export const assignRepair = async (record, workerId) => toPageRecord(await reque
     expected_status: record.status, expected_assigned_worker_id: record.assignedWorkerId,
     expected_updated_at: record.updatedAt },
 }))
+
+export const getTimeline = id => request(orderPath(id) + '/timeline')
