@@ -144,3 +144,36 @@ textarea { resize: vertical; min-height: 130px; line-height: 1.8; }
 footer { text-align: center; padding: 22px; border-top: 1px solid #e5ebe7; color: #95a198; font-size: 12px; }
 @media (max-width: 800px) { .header-inner { flex-wrap: wrap; gap: 16px; } .brand { font-size: 17px; } .identity { margin-left: auto; } nav { order: 3; width: 100%; margin: 0; } nav button { flex: 1; } .welcome { padding: 30px; } .welcome h1 { font-size: 26px; } .decoration { right: -60px; opacity: .5; } }
 @media (max-width: 540px) { main { padding: 24px 16px; } .header-inner { padding: 16px; } .brand small { letter-spacing: 1px; } .identity { font-size: 11px; } .brand-icon { width: 34px; height: 36px; } .welcome { padding: 26px 22px; } .welcome h1 { font-size: 24px; line-height: 1.5; } .stats div { padding: 0 18px; } .stats strong { font-size: 24px; } .features, .form-grid { grid-template-columns: 1fr; } .section-heading > span { font-size: 11px; } .form-panel, .panel { padding: 22px 18px; } .form-actions { align-items: stretch; flex-direction: column; } .heading-action { align-items: flex-start; flex-direction: column; } .record-top > div { align-items: flex-start; flex-direction: column; gap: 8px; } .record-top { align-items: flex-start; } }
+
+/* V2 authentication and administration; retain all existing styles above. */
+.auth-main { display: grid; place-items: start center; padding-top: 48px; }
+.auth-panel { width: 100%; max-width: 460px; }
+.auth-panel .field { margin: 20px 0; }
+.auth-toggle { margin-top: 22px; }
+.auth-recovery { max-width: 520px; margin: 0 auto 24px; padding: 16px; display: flex; flex-wrap: wrap; gap: 12px; }
+.auth-recovery p { width: 100%; }
+.account-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; white-space: normal; overflow-wrap: anywhere; }
+.account-identity .secondary { padding: 8px 12px; }
+.header-inner > *, main > *, .record-top > div { min-width: 0; }
+nav { flex-wrap: wrap; }
+nav button { padding-inline: 10px; }
+.worker-create { display: flex; align-items: end; }
+.workers-panel { margin-top: 24px; }
+.worker-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; overflow-wrap: anywhere; }
+.worker-row h3 { font-size: 16px; margin-bottom: 8px; }
+.pending-time, .ownership-note { margin-top: 16px; }
+.assignment-form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 20px; }
+.assignment-form label { margin: 0; }
+.assignment-form select { width: auto; flex: 1; min-width: 160px; max-width: 360px; }
+.assignment-form p { width: 100%; }
+.request-error, .record-meta, .worker-row > div { overflow-wrap: anywhere; min-width: 0; }
+@media (max-width: 540px) {
+  .account-identity { width: 100%; margin-left: 0; }
+  nav { gap: 4px; }
+  nav button { flex: 1 1 40%; }
+  .assignment-form { align-items: stretch; flex-direction: column; }
+  .assignment-form select { width: 100%; max-width: none; min-width: 0; }
+  .worker-row { align-items: flex-start; flex-wrap: wrap; }
+  .brand { max-width: 100%; }
+  .category { flex-shrink: 0; }
+}
