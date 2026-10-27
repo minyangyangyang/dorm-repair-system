@@ -108,10 +108,22 @@ function rowSelector(orderNo) {
 async function clickRow(orderNo, text) {
   await eventually(() => evaluate('(() => {const row=' + rowSelector(orderNo) + '; const button=row && Array.from(row.querySelectorAll("button")).find(item=>item.textContent.trim()===' + q(text) + ');if(!button||button.disabled)return false;button.click();return true})()'), '工单操作')
 }
+async function choosePhotos(paths) {
+  const root=await cdp.send('DOM.getDocument')
+  const node=await cdp.send('DOM.querySelector',{nodeId:root.root.nodeId,selector:'.photo-input'})
+  await cdp.send('DOM.setFileInputFiles',{nodeId:node.nodeId,files:paths})
+  await delay(100)
+}
 async function noOverflow() {
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth + 1'), true)
 }
 try {
+  const photoFixtures=JSON.parse(readFileSync(join(root,'backend/test-support/photos.json'),'utf8'))
+  const photoPaths=['PNG','JPEG','WEBP'].map(format=>{
+    const path=join(work,'fixture.'+format.toLowerCase())
+    writeFileSync(path,Buffer.from(photoFixtures[format],'base64'))
+    return path
+  })
   const frontendPort = await freePort()
   const origin = 'http://127.0.0.1:' + frontendPort
   const testDb = join(work, 'browser.sqlite')
@@ -128,7 +140,7 @@ try {
   seed('OTHER-PRIVATE', Number(other.lastInsertRowid), '其他学生独有内容')
   seed('LEGACY-PENDING')
   const raceId = seed('RACE-PENDING')
-  backend = createApp(db, { auth: { allowedOrigins: [origin], loginLimit: 100, registerLimit: 100 } }).listen(0, '127.0.0.1')
+  backend = createApp(db, { uploads: { directory: join(work, 'uploads') }, auth: { allowedOrigins: [origin], loginLimit: 100, registerLimit: 100 } }).listen(0, '127.0.0.1')
   await once(backend, 'listening')
   const target = 'http://127.0.0.1:' + backend.address().port
   start(process.execPath, ['frontend/node_modules/vite/bin/vite.js', 'frontend', '--host', '127.0.0.1', '--port', String(frontendPort), '--strictPort'], {
@@ -151,6 +163,9 @@ try {
   cdp.on('Runtime.exceptionThrown', () => consoleErrors.push('页面运行时异常'))
   cdp.on('Page.javascriptDialogOpening', () => { confirmations++; cdp.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}) })
   await cdp.send('Runtime.enable')
+  const trackUrls='(() => {window.__photoUrls=new Set();const create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL);URL.createObjectURL=value=>{const url=create(value);window.__photoUrls.add(url);return url};URL.revokeObjectURL=url=>{window.__photoUrls.delete(url);revoke(url)}})()'
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument',{source:trackUrls})
+  await evaluate(trackUrls)
   await cdp.send('Page.enable')
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 375, height: 812, deviceScaleFactor: 1, mobile: true })
   await eventually(() => evaluate('!!document.querySelector("#auth-username")'), '初始登录页')
@@ -163,13 +178,25 @@ try {
   await login('browser_student')
   await nav('提交报修')
   for (const [id, value] of Object.entries({ building: '3栋', room: '101', category: '水电', description: '浏览器维修流程', contact: '浏览器学生', phone: '13800000000' })) await fill('#' + id, value)
+  await choosePhotos(photoPaths.slice(0,2))
+  assert.equal(await evaluate('document.querySelectorAll(".photo-picker .photo-grid img").length'),2)
+  await click('button','移除照片 2')
+  await choosePhotos(photoPaths.slice(1))
+  assert.equal(await evaluate('document.querySelectorAll(".photo-picker .photo-grid img").length'),3)
+  await noOverflow()
   await click('form button[type=submit]')
+  await waitText('工单已提交，照片上传成功。')
   await waitText('浏览器维修流程')
   assert.equal(await contains('OTHER-PRIVATE'), false)
   const order = db.prepare("SELECT * FROM repair_orders WHERE description='浏览器维修流程'").get()
   const student = db.prepare("SELECT id FROM users WHERE username='browser_student'").get()
   await clickRow(order.order_no, '查看详情')
   await waitText('维修进度时间轴'); await waitText('未完成')
+  await eventually(()=>evaluate('document.querySelectorAll(".repair-photos .photo-thumbnail img").length === 3 && Array.from(document.querySelectorAll(".repair-photos img")).every(img=>img.complete && img.naturalWidth>0)'),'三格式照片显示')
+  await click('button[aria-label="查看故障照片 1"]')
+  await eventually(()=>evaluate('!!document.querySelector("dialog.photo-dialog[open] img")'),'照片大图')
+  await click('button','关闭大图')
+  await noOverflow()
   assert.equal(await evaluate('document.querySelector(".timeline-events")?.textContent.includes("浏览器学生")'), true)
   await clickRow(order.order_no, '收起详情')
   // Fail only timeline loading: the independent basic-detail request must still succeed.
@@ -188,15 +215,32 @@ try {
   await cdp.send('Page.reload')
   await eventually(() => evaluate('!!document.querySelector("nav")'), '刷新恢复会话')
   await nav('我的工单'); await waitText(order.order_no); await noOverflow()
-  passed('学生注册、登录、提交、本人范围、刷新恢复会话和手机布局')
+  passed('学生注册、登录、三格式照片预览移除上传、大图和手机布局')
+  await nav('提交报修')
+  for(const [id,value]of Object.entries({building:'3栋',room:'101',category:'水电',description:'照片上传失败的工单',contact:'浏览器学生',phone:'13800000000'}))await fill('#'+id,value)
+  await choosePhotos([photoPaths[0]])
+  db.exec("CREATE TEMP TRIGGER browser_attachment_failure BEFORE INSERT ON repair_attachments BEGIN SELECT RAISE(ABORT,'browser attachment failure'); END")
+  await click('form button[type=submit]')
+  await waitText('已提交，但照片上传失败')
+  const partial=db.prepare("SELECT id FROM repair_orders WHERE description='照片上传失败的工单'").get()
+  assert.ok(partial)
+  assert.equal(db.prepare('SELECT count(*) AS n FROM repair_attachments WHERE repair_order_id=?').get(partial.id).n,0)
+  db.exec('DROP TRIGGER browser_attachment_failure')
+  await click('button','重试上传照片')
+  await waitText('工单已提交，照片上传成功。')
+  assert.equal(db.prepare("SELECT count(*) AS n FROM repair_orders WHERE description='照片上传失败的工单'").get().n,1)
+  assert.equal(db.prepare('SELECT count(*) AS n FROM repair_attachments WHERE repair_order_id=?').get(partial.id).n,1)
+  passed('工单成功与照片失败明确区分，重试不重复建单')
   await logout()
   assert.equal(await contains('浏览器维修流程'), false)
-  passed('退出清空上一账号工单')
+  assert.equal(await evaluate('window.__photoUrls.size'),0)
+  passed('退出清空上一账号工单和图片对象 URL')
 
   await login('browser_admin')
   await click('nav button[data-page="messages"]')
   await waitText('有新的报修工单')
   await click('button', '标记已读')
+  await click('button', '全部已读')
   await eventually(() => evaluate('document.querySelector(".notification-badge")?.textContent === "0"'), '管理员消息已读角标')
   await nav('维修人员')
   for (const username of ['browser_worker1', 'browser_worker2']) {

@@ -83,6 +83,25 @@ export function migrateDatabase(db) {
       // Existing logs and historical orders are intentionally not replayed.
       db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)').run(new Date().toISOString())
     }
+
+    if (!db.prepare('SELECT version FROM schema_migrations WHERE version = 4').get()) {
+      db.exec(`
+        CREATE TABLE repair_attachments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          repair_order_id INTEGER NOT NULL REFERENCES repair_orders(id),
+          uploader_id INTEGER NOT NULL REFERENCES users(id),
+          storage_name TEXT NOT NULL UNIQUE,
+          mime_type TEXT NOT NULL CHECK(mime_type IN ('image/jpeg','image/png','image/webp')),
+          byte_size INTEGER NOT NULL CHECK(byte_size BETWEEN 1 AND 5242880),
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_repair_attachments_order ON repair_attachments(repair_order_id,id);
+        CREATE TRIGGER repair_attachments_limit BEFORE INSERT ON repair_attachments
+          WHEN (SELECT count(*) FROM repair_attachments WHERE repair_order_id=NEW.repair_order_id)>=3
+          BEGIN SELECT RAISE(ABORT,'attachment limit reached'); END;
+      `)
+      db.prepare('INSERT INTO schema_migrations(version,applied_at) VALUES (4,?)').run(new Date().toISOString())
+    }
     db.exec('COMMIT')
   } catch (error) {
     if (db.isTransaction) db.exec('ROLLBACK')

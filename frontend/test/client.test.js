@@ -1,3 +1,4 @@
+import { uploadAttachments, getAttachmentBlob } from '../src/api/attachments.js'
 import { getNotifications, getUnreadCount, markNotificationRead, markAllNotificationsRead } from '../src/api/notifications.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -94,4 +95,35 @@ test('消息 API 使用本人接口、分页、凭据和统一写防护', async 
       await rejected
     }
   } finally { globalThis.fetch=original; resetRequests() }
+})
+
+test('照片上传与二进制读取沿用凭据和防护，编码后仍检查账号代数',async()=>{
+  const original=globalThis.fetch
+  const calls=[]
+  const bytes=new Uint8Array([1,2,3])
+  globalThis.fetch=async(url,options)=>{calls.push({url,options});return response(201,{success:true,data:[]})}
+  try{
+    await uploadAttachments(42,[new Blob([bytes],{type:'image/png'})])
+    assert.equal(calls[0].url,'/api/repairs/42/attachments')
+    assert.equal(calls[0].options.credentials,'include')
+    assert.equal(calls[0].options.headers['X-Auth-Request'],'1')
+    assert.deepEqual(JSON.parse(calls[0].options.body),{files:[{mime:'image/png',data:'AQID'}]})
+    const blob=new Blob([bytes],{type:'image/png'})
+    globalThis.fetch=async()=>({ok:true,status:200,blob:async()=>blob})
+    assert.equal(await getAttachmentBlob(42,1),blob)
+    let finish
+    const pending=uploadAttachments(42,[{type:'image/png',arrayBuffer:()=>new Promise(resolve=>{finish=resolve})}])
+    const rejected=assert.rejects(pending,error=>error.code==='STALE')
+    resetRequests();finish(bytes.buffer);await rejected
+  }finally{globalThis.fetch=original;resetRequests()}
+})
+test('旧账号图片响应体完成后不得返回供新账号生成对象 URL',async()=>{
+  const original=globalThis.fetch
+  let finish,reading
+  const started=new Promise(resolve=>{reading=resolve})
+  globalThis.fetch=async()=>({ok:true,status:200,blob:()=>{reading();return new Promise(resolve=>{finish=resolve})}})
+  try{
+    const pending=getAttachmentBlob(42,1),rejected=assert.rejects(pending,error=>error.code==='STALE')
+    await started;resetRequests();finish(new Blob(['old']));await rejected
+  }finally{globalThis.fetch=original;resetRequests()}
 })

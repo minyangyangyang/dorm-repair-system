@@ -14,11 +14,11 @@ export function resetRequests() {
   pending.clear()
 }
 
-export async function request(path, { method = 'GET', body, ignoreUnauthorized = false } = {}) {
+export async function request(path, { method = 'GET', body, ignoreUnauthorized = false, responseType = 'json', timeoutMs = 10000 } = {}) {
   const started = generation
   const controller = new AbortController()
   pending.add(controller)
-  const timeout = setTimeout(() => controller.abort(), 10000)
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   const writing = !['GET', 'HEAD'].includes(method)
   try {
     const response = await fetch('/api' + path, {
@@ -27,6 +27,11 @@ export async function request(path, { method = 'GET', body, ignoreUnauthorized =
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
     if (started !== generation) throw new ApiError('请求已过期', 0, 'STALE')
+    if (response.ok && responseType === 'blob') {
+      const blob = await response.blob()
+      if (started !== generation) throw new ApiError('请求已过期',0,'STALE')
+      return blob
+    }
     let result
     try { result = await response.json() } catch {
       if (started !== generation) throw new ApiError('请求已过期', 0, 'STALE')

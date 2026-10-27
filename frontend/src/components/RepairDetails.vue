@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { formatTime } from '../utils/time.js'
+import RepairPhotos from './RepairPhotos.vue'
 import RepairTimeline from './RepairTimeline.vue'
 import { getRepair } from '../api/repairs.js'
 import { isCancelled } from '../api/client.js'
@@ -42,6 +43,7 @@ function toggle() { if (expanded.value) close(); else { expanded.value = true; l
       <div class="section-heading"><h2 :id="`details-title-${displayRecord.databaseId}`">报修详情</h2><button class="secondary details-close" @click="close">关闭详情</button></div>
       <p v-if="loading" class="loading-message" role="status">正在读取详情…</p><div v-if="error" class="request-error" role="alert">{{ error }}<button class="secondary" @click="load">重试详情</button></div>
       <dl v-if="!loading && !error" class="details-fields"><div v-for="[label, value] in fields" :key="label"><dt>{{ label }}</dt><dd>{{ value || '未填写' }}</dd></div><div class="details-wide"><dt>故障描述</dt><dd class="details-description">{{ displayRecord.description || '未填写' }}</dd></div></dl>
+      <RepairPhotos v-if="!loading && !error" :key="displayRecord.databaseId + ':photos:' + displayRecord.updatedAt" :order-id="displayRecord.databaseId" />
       <RepairTimeline v-if="!loading && !error" :key="displayRecord.databaseId + ':' + displayRecord.updatedAt" :order-id="displayRecord.databaseId" :status="displayRecord.status" />
       <section v-if="evaluation && displayRecord.status === '已完成'" class="details-evaluation">
         <h3>维修评价</h3>

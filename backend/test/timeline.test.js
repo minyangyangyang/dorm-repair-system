@@ -198,7 +198,7 @@ test('旧版本升级和重复迁移保留工单、评价、账号及会话，�
   migrateDatabase(db); migrateDatabase(db)
   for (const table of Object.keys(snapshot)) assert.deepEqual(rows(db.prepare('SELECT * FROM ' + table).all()), snapshot[table])
   assert.equal(db.prepare('SELECT count(*) AS n FROM repair_logs').get().n, 0)
-  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 3)
+  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 4)
   const result = (await timeline('admin', id)).body.data
   assert.equal(result.history_incomplete, true)
   assert.deepEqual(result.events, [])

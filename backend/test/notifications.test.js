@@ -224,7 +224,7 @@ test('版本 2 升级不补发历史通知，重复迁移保留原工单、评�
   migrateDatabase(db); migrateDatabase(db)
   for (const table of Object.keys(snapshot)) assert.deepEqual(rows(db.prepare('SELECT * FROM ' + table).all()), snapshot[table])
   assert.equal(db.prepare('SELECT count(*) AS n FROM notifications').get().n, 0)
-  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 3)
+  assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get().n, 4)
   db.exec('DROP TABLE notifications; DELETE FROM schema_migrations WHERE version=3; CREATE INDEX idx_notifications_recipient_time ON users(id)')
   assert.throws(() => migrateDatabase(db))
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name='notifications'").get(), undefined)

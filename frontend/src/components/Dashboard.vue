@@ -6,6 +6,8 @@ import { createRepair, getRepairs, acceptRepair, updateRepairStatus, getWorkers,
 import EvaluationPanel from './EvaluationPanel.vue'
 import StatisticsPage from './StatisticsPage.vue'
 import RepairDetails from './RepairDetails.vue'
+import ImagePicker from './ImagePicker.vue'
+import { uploadAttachments, getAttachments } from '../api/attachments.js'
 import AdminWorkers from './AdminWorkers.vue'
 import MessageCenter from './MessageCenter.vue'
 import { getUnreadCount } from '../api/notifications.js'
@@ -46,6 +48,7 @@ const actionError = ref('')
 const updatingId = ref(null)
 const selections = reactive({})
 const evaluations = reactive({})
+const photos = ref([]), uploadOrder = ref(null), uploadError = ref(''), uploading = ref(false)
 const submitting = ref(false)
 const submitError = ref('')
 const errors = ref({})
@@ -57,7 +60,7 @@ let listSequence = 0
 let workerSequence = 0
 onBeforeUnmount(() => {
   active = false; listSequence++; workerSequence++; unreadSequence++; unreadCount.value = null
-  records.value = []; workers.value = []
+  records.value = []; workers.value = []; photos.value = []; uploadOrder.value = null
   Object.assign(form, blank())
   for (const key of Object.keys(evaluations)) delete evaluations[key]
 })
@@ -120,8 +123,26 @@ function assign(record) {
   if (!id) { actionError.value = '请选择启用的维修人员。'; return }
   mutate(record, () => assignRepair(record, id))
 }
+function dismissUpload() { photos.value=[];uploadOrder.value=null;uploadError.value='' }
+async function sendPhotos(retry=true) {
+  if (!uploadOrder.value || uploading.value || !photos.value.length) return
+  uploading.value=true;uploadError.value=''
+  try {
+    if (retry) {
+      const existing=await getAttachments(uploadOrder.value.databaseId)
+      if (!active) return
+      if (existing.length) {uploadError.value='工单已存在 '+existing.length+' 张照片，请到详情确认，避免重复上传。';return}
+    }
+    await uploadAttachments(uploadOrder.value.databaseId,photos.value)
+    if (!active) return
+    message.value='工单已提交，照片上传成功。';dismissUpload()
+    if (retry) await loadRepairs()
+  } catch(issue) {
+    if (active && !isCancelled(issue)) uploadError.value='工单 '+uploadOrder.value.id+' 已提交，但照片上传失败或结果未确认：'+issue.message+'。请勿重复提交工单，可重试照片或到详情核对。'
+  } finally {if(active)uploading.value=false}
+}
 async function submit() {
-  if (submitting.value || loading.value) return
+  if (submitting.value || uploading.value || uploadOrder.value || loading.value) return
   const issues = {}
   for (const [key, label] of Object.entries(labels)) {
     if (!form[key].trim()) issues[key] = '请填写' + label
@@ -132,9 +153,13 @@ async function submit() {
   if (Object.keys(issues).length) return
   submitting.value = true; submitError.value = ''
   try {
-    await createRepair(form)
+    const created = await createRepair(form)
     if (!active) return
-    Object.assign(form, blank()); page.value = 'records'; message.value = '报修提交成功。'; loadUnread()
+    Object.assign(form, blank()); page.value = 'records'; message.value = '工单已提交成功。'; loadUnread()
+    if (photos.value.length) {
+      uploadOrder.value = created
+      await sendPhotos(false)
+    }
     await loadRepairs()
   } catch (issue) { if (active && !isCancelled(issue)) submitError.value = issue.message }
   finally { if (active) submitting.value = false }
@@ -149,6 +174,12 @@ async function submit() {
   </div></header>
   <main>
     <p v-if="message" class="success" role="status">{{ message }}</p>
+    <section v-if="uploadOrder" class="panel upload-recovery">
+      <p v-if="uploading" class="loading-message" role="status">工单已提交，正在上传照片…</p>
+      <p v-if="uploadError" class="request-error" role="alert">{{ uploadError }}</p>
+      <ImagePicker v-model="photos" :disabled="uploading" />
+      <div class="message-actions"><button class="primary" :disabled="uploading || !photos.length" @click="sendPhotos(true)">重试上传照片</button><button class="secondary" :disabled="uploading" @click="dismissUpload">保留工单，结束本次上传</button></div>
+    </section>
     <p v-if="actionError" class="request-error" role="alert">{{ actionError }}</p>
     <MessageCenter v-if="page === 'messages'" @changed="loadUnread" />
     <StatisticsPage v-else-if="page === 'statistics'" :scope-label="role === 'admin' ? '全部工单' : role === 'worker' ? '本人负责工单' : '我的工单'" />
@@ -173,7 +204,7 @@ async function submit() {
             <input v-else :id="key" v-model="form[key]" required :type="key === 'phone' ? 'tel' : 'text'" :maxlength="key === 'phone' ? 11 : 50" :autocomplete="key === 'phone' ? 'tel' : key === 'contact' ? 'name' : 'off'" :placeholder="key === 'building' ? '例如：3号楼' : key === 'room' ? '例如：302' : key === 'phone' ? '请输入11位手机号码' : '请输入联系人姓名'" :aria-invalid="!!errors[key]" :aria-describedby="errors[key] ? `${key}-error` : undefined" />
             <p v-if="errors[key]" :id="`${key}-error`" class="error">{{ errors[key] }}</p><p v-if="key === 'description'" class="char-count">{{ form.description.length }}/500</p>
           </div>
-        </div></fieldset><div class="form-actions"><span>提交后可在“我的报修”中查看记录。</span><button class="primary" type="submit" :disabled="submitting || loading">{{ submitting ? '正在提交……' : '提交报修 →' }}</button></div></form>
+        </div><ImagePicker v-model="photos" :disabled="submitting" /></fieldset><div class="form-actions"><span>提交后可在“我的报修”中查看记录。</span><button class="primary" type="submit" :disabled="submitting || loading || !!uploadOrder">{{ submitting ? '正在提交……' : '提交报修 →' }}</button></div></form>
       </section>
 
     </template>

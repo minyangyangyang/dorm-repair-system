@@ -1,3 +1,4 @@
+import { createAttachmentsRouter } from './attachments.js'
 import { createNotificationsRouter } from './notifications.js'
 import { appendRepairLog, withRepairTransaction, timelineHandler } from './repair-logs.js'
 import { createAuthRouter, createRequestSecurity } from './auth.js'
@@ -25,7 +26,9 @@ export function createApp(db, options = {}) {
   })
 
   // Health/auth are the only public API endpoints; business routes always require a live session.
-  app.use('/api', requireSession(db), security.protectWrite, express.json({ limit: '32kb' }))
+  app.use('/api', requireSession(db), security.protectWrite)
+  app.use('/api/repairs', createAttachmentsRouter(db, options.uploads))
+  app.use('/api', express.json({ limit: '32kb' }))
   app.use('/api/notifications', createNotificationsRouter(db))
   app.use('/api/admin', createAdminRouter(db))
   app.patch('/api/repairs/:id/assignment', requireRoles('admin'), assignOrder(db))
