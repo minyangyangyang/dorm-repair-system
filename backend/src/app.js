@@ -1,5 +1,7 @@
+import { createAuthRouter, createRequestSecurity } from './auth.js'
+import { createAdminRouter, assignOrder } from './admin.js'
+import { fail, nextUpdatedAt, positiveId, requireRoles, requireSession, orderScope, visibleOrder, visibleOrders } from './permissions.js'
 import express from 'express'
-import cors from 'cors'
 import { randomUUID } from 'node:crypto'
 
 const fields = { building: '宿舍楼', room: '房间号', category: '故障类别', description: '问题描述', contact_name: '联系人', contact_phone: '联系电话' }
@@ -8,28 +10,44 @@ const categories = ['水电', '家具', '网络', '门窗', '其他']
 const nextStatus = new Map([['待处理', '已接单'], ['已接单', '维修中'], ['维修中', '已完成']])
 const statuses = ['待处理', '已接单', '维修中', '已完成']
 
-export function createApp(db) {
+export function createApp(db, options = {}) {
   const app = express()
-  app.use(cors())
-  app.use(express.json({ limit: '32kb' }))
+
+  const security = createRequestSecurity(options.auth)
+  app.use('/api', security.headers, security.cors)
+  app.use('/api/auth', security.protectWrite, express.json({ limit: '32kb' }), createAuthRouter(db, options.auth, security))
 
   app.get('/api/health', (req, res) => {
     db.prepare('SELECT 1').get()
     res.json({ success: true, message: '宿舍报修系统后端运行正常' })
   })
 
+  // Health/auth are the only public API endpoints; business routes always require a live session.
+  app.use('/api', requireSession(db), security.protectWrite, express.json({ limit: '32kb' }))
+  app.use('/api/admin', createAdminRouter(db))
+  app.patch('/api/repairs/:id/assignment', requireRoles('admin'), assignOrder(db))
+
+  app.get('/api/repairs/:id', (req, res) => {
+    const id = positiveId(req.params.id)
+    if (!id) return fail(res, 400, '工单 id 必须是正整数数据库主键')
+    const order = visibleOrder(db, req.user, id)
+    if (!order) return fail(res, 404, '工单不存在')
+    res.json({ success: true, data: order })
+  })
+
   app.get('/api/repairs', (req, res) => {
-    const orders = db.prepare('SELECT * FROM repair_orders ORDER BY id DESC').all()
+    const orders = visibleOrders(db, req.user)
     res.json({ success: true, data: orders })
   })
 
   app.get('/api/statistics', (req, res) => {
+    const scope = orderScope(req.user, true)
     // 同一只读事务保证三次查询看到相同数据，不受其他连接写入影响。
     db.exec('BEGIN')
     try {
-      const total = db.prepare('SELECT COUNT(*) AS count FROM repair_orders').get().count
-      const statusRows = db.prepare('SELECT status, COUNT(*) AS count FROM repair_orders GROUP BY status').all()
-      const categoryRows = db.prepare('SELECT category, COUNT(*) AS count FROM repair_orders GROUP BY category').all()
+      const total = db.prepare(`SELECT COUNT(*) AS count FROM repair_orders WHERE ${scope.sql}`).get(...scope.params).count
+      const statusRows = db.prepare(`SELECT status, COUNT(*) AS count FROM repair_orders WHERE ${scope.sql} GROUP BY status`).all(...scope.params)
+      const categoryRows = db.prepare(`SELECT category, COUNT(*) AS count FROM repair_orders WHERE ${scope.sql} GROUP BY category`).all(...scope.params)
       db.exec('COMMIT')
       // 只初始化合法字段的零值，实际数量全部来自 SQL 查询。
       const statusDistribution = Object.fromEntries(statuses.map(status => [status, 0]))
@@ -45,7 +63,7 @@ export function createApp(db) {
     }
   })
 
-  app.post('/api/repairs', (req, res) => {
+  app.post('/api/repairs', requireRoles('student'), (req, res) => {
     if (!req.is('application/json')) return res.status(415).json({ success: false, message: '请使用 application/json 格式提交' })
     const body = req.body
     if (!body || typeof body !== 'object' || Array.isArray(body)) return res.status(400).json({ success: false, message: '请求内容必须是 JSON 对象' })
@@ -68,34 +86,49 @@ export function createApp(db) {
     const now = new Date().toISOString()
     const orderNo = `BX${now.slice(0, 10).replaceAll('-', '')}-${randomUUID()}`
     const result = db.prepare(`INSERT INTO repair_orders
-      (order_no, building, room, category, description, contact_name, contact_phone, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, '待处理', ?, ?)`)
-      .run(orderNo, order.building, order.room, order.category, order.description, order.contact_name, order.contact_phone, now, now)
+      (order_no, building, room, category, description, contact_name, contact_phone, status, created_at, updated_at, student_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, '待处理', ?, ?, ?)`)
+      .run(orderNo, order.building, order.room, order.category, order.description, order.contact_name, order.contact_phone, now, now, req.user.id)
     const created = db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(result.lastInsertRowid)
     res.status(201).json({ success: true, message: '报修工单创建成功', data: created })
   })
 
-  app.patch('/api/repairs/:id/status', (req, res) => {
-    const id = Number(req.params.id)
-    if (!/^\d+$/.test(req.params.id) || !Number.isSafeInteger(id) || id < 1) {
-      return res.status(400).json({ success: false, message: '工单 id 必须是正整数数据库主键' })
-    }
-    const order = db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(id)
-    if (!order) return res.status(404).json({ success: false, message: '工单不存在' })
-    if (!req.is('application/json')) return res.status(415).json({ success: false, message: '请使用 application/json 格式提交' })
+  function acceptOrder(req, res) {
+    const id = positiveId(req.params.id)
+    if (!id) return fail(res, 400, '工单 id 必须是正整数数据库主键')
+    // Only non-personal metadata is read before the conditional update.
+    const order = db.prepare("SELECT updated_at FROM repair_orders WHERE id = ? AND status = '待处理' AND assigned_worker_id IS NULL").get(id)
+    // Opaque conflict: do not distinguish a missing order from one already claimed by another worker.
+    if (!order) return fail(res, 409, '工单已不可接单，请刷新列表')
+    const updated = db.prepare(`UPDATE repair_orders
+      SET status = '已接单', assigned_worker_id = ?, updated_at = ?
+      WHERE id = ? AND status = '待处理' AND assigned_worker_id IS NULL AND updated_at = ?
+      RETURNING *`).get(req.user.id, nextUpdatedAt(order), id, order.updated_at)
+    if (!updated) return fail(res, 409, '工单已不可接单，请刷新列表')
+    res.json({ success: true, message: '接单成功', data: updated })
+  }
+
+  app.post('/api/repairs/:id/accept', requireRoles('worker'), acceptOrder)
+
+  app.patch('/api/repairs/:id/status', requireRoles('worker'), (req, res) => {
+    const id = positiveId(req.params.id)
+    if (!id) return fail(res, 400, '工单 id 必须是正整数数据库主键')
     const status = req.body?.status
-    if (Array.isArray(req.body) || !statuses.includes(status)) {
-      return res.status(400).json({ success: false, message: '状态必须为待处理、已接单、维修中或已完成' })
+    if (!req.body || Array.isArray(req.body) || !statuses.includes(status)) {
+      return fail(res, 400, '状态必须为待处理、已接单、维修中或已完成')
     }
+    // Preserve the V1 status API as an alias for atomic acceptance.
+    if (status === '已接单') return acceptOrder(req, res)
+    const order = visibleOrder(db, req.user, id)
+    if (!order) return fail(res, 404, '工单不存在')
     if (nextStatus.get(order.status) !== status) {
-      return res.status(409).json({ success: false, message: `不能从“${order.status}”变为“${status}”：状态不可跳级、回退或重复设置，已完成工单不可再操作` })
+      return fail(res, 409, `不能从“${order.status}”变为“${status}”：状态不可跳级、回退或重复设置，已完成工单不可再操作`)
     }
-    // 将旧状态放入 UPDATE 条件，防止同时操作时覆盖其他请求的修改。
-    const updatedAt = new Date(Math.max(Date.now(), Date.parse(order.updated_at) + 1)).toISOString()
-    const result = db.prepare('UPDATE repair_orders SET status = ?, updated_at = ? WHERE id = ? AND status = ?')
-      .run(status, updatedAt, id, order.status)
-    if (result.changes !== 1) return res.status(409).json({ success: false, message: '工单状态已变化，请重新读取后再操作' })
-    const updated = db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(id)
+    if (order.assigned_worker_id !== req.user.id) return fail(res, 404, '工单不存在')
+    const updated = db.prepare(`UPDATE repair_orders SET status = ?, updated_at = ?
+      WHERE id = ? AND status = ? AND assigned_worker_id = ? AND updated_at = ?
+      RETURNING *`).get(status, nextUpdatedAt(order), id, order.status, req.user.id, order.updated_at)
+    if (!updated) return fail(res, 409, '工单状态或负责人已变化，请重新读取后再操作')
     res.json({ success: true, message: `工单状态已更新为“${status}”`, data: updated })
   })
 
@@ -105,18 +138,19 @@ export function createApp(db) {
     if (!/^\d+$/.test(req.params.id) || !Number.isSafeInteger(id) || id < 1) {
       return res.status(400).json({ success: false, message: '工单 id 必须是正整数数据库主键' })
     }
-    const order = db.prepare('SELECT * FROM repair_orders WHERE id = ?').get(id)
+    const order = visibleOrder(db, req.user, id)
     if (!order) return res.status(404).json({ success: false, message: '工单不存在' })
+    if (req.user.role === 'student' && order.status !== '已完成') return fail(res, 409, '只有已完成的工单才能查看或提交评价')
     req.repairOrder = order
     next()
   }
 
-  app.get('/api/repairs/:id/evaluation', findEvaluationOrder, (req, res) => {
+  app.get('/api/repairs/:id/evaluation', requireRoles('student', 'admin'), findEvaluationOrder, (req, res) => {
     const evaluation = db.prepare('SELECT * FROM evaluations WHERE repair_order_id = ?').get(req.repairOrder.id)
     res.json({ success: true, message: evaluation ? '评价查询成功' : '该工单尚未评价', data: evaluation || null })
   })
 
-  app.post('/api/repairs/:id/evaluation', findEvaluationOrder, (req, res) => {
+  app.post('/api/repairs/:id/evaluation', requireRoles('student'), findEvaluationOrder, (req, res) => {
     if (!req.is('application/json')) return res.status(415).json({ success: false, message: '请使用 application/json 格式提交' })
     const body = req.body
     if (!body || typeof body !== 'object' || Array.isArray(body)) return res.status(400).json({ success: false, message: '请求内容必须是 JSON 对象' })

@@ -1,3 +1,5 @@
+import { initializeAdmin } from '../src/accounts.js'
+import { loginClient, testAccount, testOrigin } from '../test-support/accounts.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -49,9 +51,12 @@ async function stopServer(child) {
 test('统计接口：空库、零值字段、SQL 真实数量、实时更新及异常恢复', async () => {
   const testPath = join(mkdtempSync(join(tmpdir(), 'dorm-statistics-test-')), 'repairs.sqlite')
   const db = openDatabase(testPath)
+  const adminAccount = testAccount('stats_admin')
+  await initializeAdmin(db, adminAccount)
   const server = createApp(db).listen(0, '127.0.0.1')
   await once(server, 'listening')
   const url = `http://127.0.0.1:${server.address().port}/api/statistics`
+  const fetch = await loginClient(url.replace('/api/statistics', ''), adminAccount)
   const states = ['待处理', '已接单', '维修中', '已完成']
   const categories = ['水电', '家具', '网络', '门窗', '其他']
   try {
@@ -107,10 +112,28 @@ test('真实服务器：校验、SQLite 写入、查询、重启持久化及数�
   try {
     server = await startServer(testDatabasePath)
     assert.ok(existsSync(testDatabasePath), '首次启动应自动创建测试数据库')
+    const fixtureDb = openDatabase(testDatabasePath)
+    const adminAccount = testAccount('regression_admin')
+    try { await initializeAdmin(fixtureDb, adminAccount) } finally { fixtureDb.close() }
+    const adminFetch = await loginClient(baseUrl, adminAccount)
+    const workerAccount = testAccount('regression_worker')
+    const workerResponse = await adminFetch(`${baseUrl}/api/admin/workers`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(workerAccount),
+    })
+    assert.equal(workerResponse.status, 201)
+    const worker = (await workerResponse.json()).data
+    const workerFetch = await loginClient(baseUrl, workerAccount)
+    const studentAccount = testAccount('regression_student')
+    const register = await globalThis.fetch(`${baseUrl}/api/auth/register`, {
+      method: 'POST', headers: { Origin: testOrigin, 'X-Auth-Request': '1', 'Content-Type': 'application/json' },
+      body: JSON.stringify(studentAccount),
+    })
+    assert.equal(register.status, 201)
+    const fetch = await loginClient(baseUrl, studentAccount)
     const health = await fetch(`${baseUrl}/api/health`)
     assert.equal(health.status, 200)
     assert.equal((await health.json()).message, '宿舍报修系统后端运行正常')
-    assert.equal(health.headers.get('access-control-allow-origin'), '*')
+    assert.equal(health.headers.get('access-control-allow-origin'), testOrigin)
     const initial = await (await fetch(`${baseUrl}/api/repairs`)).json()
     const payload = {
       building: '测试宿舍楼', room: '301', category: '水电',
@@ -147,7 +170,7 @@ test('真实服务器：校验、SQLite 写入、查询、重启持久化及数�
     assert.equal(created.created_at, created.updated_at)
     const listed = await (await fetch(`${baseUrl}/api/repairs`)).json()
     assert.deepEqual(listed.data[0], created)
-    const patch = (id, status) => fetch(`${baseUrl}/api/repairs/${id}/status`, {
+    const patch = (id, status) => workerFetch(`${baseUrl}/api/repairs/${id}/status`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
     })
     const evaluate = (id, body = { rating: 5, comment: '维修很及时，问题已经解决。' }) => fetch(`${baseUrl}/api/repairs/${id}/evaluation`, {
@@ -155,16 +178,14 @@ test('真实服务器：校验、SQLite 写入、查询、重启持久化及数�
     })
     const getEvaluation = id => fetch(`${baseUrl}/api/repairs/${id}/evaluation`)
     const emptyEvaluation = await getEvaluation(created.id)
-    assert.equal(emptyEvaluation.status, 200)
-    assert.equal((await emptyEvaluation.json()).data, null)
+    assert.equal(emptyEvaluation.status, 409)
     // 遍历每一阶段的所有目标状态：除唯一下一步外，一律拒绝。
     const stages = ['待处理', '已接单', '维修中', '已完成']
     for (let index = 0; index < stages.length; index++) {
       if (index < 3) {
         const unfinished = await evaluate(created.id)
         assert.equal(unfinished.status, 409, `${stages[index]}工单不可评价`)
-        assert.equal((await getEvaluation(created.id)).status, 200)
-        assert.equal((await (await getEvaluation(created.id)).json()).data, null)
+        assert.equal((await getEvaluation(created.id)).status, 409)
       }
       for (const target of stages.filter(status => status !== stages[index + 1])) {
         const rejected = await patch(created.id, target)
@@ -181,11 +202,12 @@ test('真实服务器：校验、SQLite 写入、查询、重启持久化及数�
         const updated = (await success.json()).data
         assert.equal(updated.status, stages[index + 1])
         assert.ok(Date.parse(updated.updated_at) > Date.parse(created.updated_at))
-        assert.deepEqual({ ...updated, status: created.status, updated_at: created.updated_at }, created)
+        assert.equal(updated.assigned_worker_id, worker.id)
+        assert.deepEqual({ ...updated, status: created.status, updated_at: created.updated_at, assigned_worker_id: created.assigned_worker_id }, created)
         created = updated
       }
     }
-    const missing = await patch(9007199254740991, '已接单')
+    const missing = await patch(9007199254740991, '维修中')
     assert.equal(missing.status, 404)
     const invalidId = await patch('abc', '已接单')
     assert.equal(invalidId.status, 400)

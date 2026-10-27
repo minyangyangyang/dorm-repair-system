@@ -1,3 +1,4 @@
+import { migrateDatabase } from './migrations.js'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -8,7 +9,8 @@ export const databasePath = resolve(fileURLToPath(new URL('../data/repairs.sqlit
 export function openDatabase(path = databasePath) {
   mkdirSync(dirname(path), { recursive: true })
   const db = new DatabaseSync(path)
-  db.exec(`
+  try {
+    db.exec(`
     PRAGMA busy_timeout = 5000;
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS repair_orders (
@@ -32,6 +34,11 @@ export function openDatabase(path = databasePath) {
       comment TEXT NOT NULL DEFAULT '' CHECK(typeof(comment) = 'text' AND length(comment) <= 500),
       created_at TEXT NOT NULL
     );
-  `)
-  return db
+    `)
+    migrateDatabase(db)
+    return db
+  } catch (error) {
+    db.close()
+    throw error
+  }
 }
