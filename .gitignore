@@ -1,2 +1,21 @@
 
 .idea/
+
+# WorkBuddy 工作区数据（智能体运行记录，不属于项目源码）
+.workbuddy/
+
+# 环境变量与密钥；保留 .env.example 等示例模板以便跟踪
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# SQLite 数据库及其日志（运行数据，不入库）
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
+# 操作系统生成的杂项文件
+.DS_Store
+Thumbs.db
